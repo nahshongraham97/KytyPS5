@@ -1552,7 +1552,12 @@ KYTY_CP_OP_PARSER(CpOpCopyData) {
 	}
 	const auto dma_src = CopyDataSrcToDma(src_sel);
 	if (dma_src == 2 && num_bytes == 8) {
-		EXIT("unsupported 64-bit immediate copyData\n");
+		// COPY_DATA carries the complete 64-bit immediate in its two source dwords, while
+		// DMA_DATA's immediate source is a repeated 32-bit fill value. Hand the full value to
+		// the command processor, which preserves both halves and validates the eight-byte
+		// destination as a single write.
+		cp.DmaDataImmediate64(CopyDataDstToDma(dst_sel), dst_cache, dst, src, write_confirm);
+		return 5;
 	}
 
 	cp.DmaData(0, CopyDataDstToDma(dst_sel), dst_cache, dst, dma_src, src_cache, src, num_bytes, 1,
