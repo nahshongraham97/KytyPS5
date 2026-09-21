@@ -410,21 +410,25 @@ void HostInputToggleMouseToJoystick() {
 }
 
 bool HostInputWaitEvent(SDL_Event* event) {
-	bool has_event;
+	// Return periodically so the main loop can drain queued cross-thread work
+	// even if the backend misses the SDL_PushEvent wakeup. A presentation thread
+	// may be waiting for that work (including a window-title update).
+	const int main_task_poll_ms =
+	    std::max(1, static_cast<int>(1000u / (2u * Config::GetVblankFrequency())));
+	int timeout_ms = main_task_poll_ms;
 	if (!g_mouse.enabled || SDL_GetKeyboardFocus() != g_mouse_window) {
 		g_mouse.next_poll = 0;
 		CenterMouseStick();
-		has_event = SDL_WaitEvent(event);
-		if (!has_event) {
-			EXIT("%s\n", SDL_GetError());
-		}
 	} else {
 		if (g_mouse.next_poll == 0) {
 			SDL_GetRelativeMouseState(nullptr, nullptr);
 			g_mouse.next_poll = SDL_GetTicks() + MOUSE_POLL_INTERVAL_MS;
 		}
-		has_event = SDL_WaitEventTimeout(event, PollMouse(SDL_GetTicks()));
+		timeout_ms = std::min(PollMouse(SDL_GetTicks()), main_task_poll_ms);
 	}
+
+	SDL_ClearError();
+	const bool has_event = SDL_WaitEventTimeout(event, timeout_ms) != 0;
 
 	if (has_event && event->type == SDL_EVENT_WINDOW_FOCUS_LOST &&
 	    event->window.windowID == SDL_GetWindowID(g_mouse_window)) {
