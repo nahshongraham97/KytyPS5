@@ -1521,6 +1521,23 @@ void TestMunmapAcrossAdjacentFlexibleMappings() {
 	std::printf("[host]    %-48s ok\n", test);
 }
 
+void TestMunmapReservedSpanWithReleasedHole() {
+	const char* test = "MunmapReservedSpanWithReleasedHole";
+	void* reserve = nullptr;
+	CheckOk(test,
+	        Libs::LibKernel::Memory::KernelReserveVirtualRange(&reserve, SceKernelPageSize * 3, 0,
+	                                                           SceKernelPageSize),
+	        "KernelReserveVirtualRange");
+	const auto base = reinterpret_cast<uint64_t>(reserve);
+	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(base + SceKernelPageSize, SceKernelPageSize),
+	        "KernelMunmap(middle hole)");
+	CheckOk(test, Libs::LibKernel::Memory::KernelMunmap(base, SceKernelPageSize * 3),
+	        "KernelMunmap(full span with hole)");
+	ExpectUnmapped(test, base);
+	ExpectUnmapped(test, base + SceKernelPageSize * 2);
+	std::printf("[host]    %-48s ok\n", test);
+}
+
 void TestNonzeroDirectOffsetAliasesSharedBacking() {
 	const char* test = "NonzeroDirectOffsetAliasesSharedBacking";
 
@@ -3313,6 +3330,7 @@ int main(int argc, char** argv) {
 	RunTest(TestFixedNoOverwriteRejectsReservedRange);
 	RunTest(TestReleasedReserveCanBeReused);
 	RunTest(TestMunmapAcrossAdjacentFlexibleMappings);
+	RunTest(TestMunmapReservedSpanWithReleasedHole);
 	RunTest(TestDirectMapQueryOffsetAndPartialMunmap);
 	RunTest(TestDirectPartialProtectUnmapPreservesNeighbors);
 #if defined(__linux__)
