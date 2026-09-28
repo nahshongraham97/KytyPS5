@@ -13,6 +13,7 @@
 #include <array>
 #include <bitset>
 #include <climits>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -139,6 +140,7 @@ struct DecodedFunction {
 struct InstructionRewrite {
 	bool protect_red_zone {};
 	bool protected_indirect_call {};
+	bool emulate_rsqrt {};
 };
 
 bool IsStackPointerRegister(ZydisRegister reg) {
@@ -738,6 +740,43 @@ bool GenerateProtectedIndirectCall(const DecodedCodeInstruction& decoded,
 	return true;
 }
 
+// Native replacement for trapped VRSQRTPS xmm, xmm (VEX.128). Produces the same result as
+// X64InstructionEmulator's ReciprocalSquareRoot(): 1/sqrt computed in double precision and
+// rounded to float, denormal inputs treated as zero, guest MXCSR (including the sticky
+// exception flags) left untouched. Avoids one illegal-instruction trap per execution.
+void GenerateReciprocalSquareRoot(const DecodedCodeInstruction& decoded, Xbyak::CodeGenerator& c) {
+	const int dst = decoded.operands[0].reg.value - ZYDIS_REGISTER_XMM0;
+	const int src = decoded.operands[1].reg.value - ZYDIS_REGISTER_XMM0;
+	int       tmp = 0;
+	while (tmp == dst || tmp == src) {
+		++tmp;
+	}
+	const Xbyak::Ymm scratch(tmp);
+	Xbyak::Label     one;
+	Xbyak::Label     done;
+
+	// Only LEA/MOV/SIMD instructions below, so RFLAGS is preserved.
+	c.lea(rsp, ptr[rsp - GuestRedZoneSize]);
+	c.lea(rsp, ptr[rsp - 48]);
+	c.vmovdqu(ptr[rsp], scratch);
+	c.stmxcsr(ptr[rsp + 32]);
+	c.mov(dword[rsp + 36], 0x1fc0); // round to nearest, all exceptions masked, DAZ
+	c.ldmxcsr(ptr[rsp + 36]);
+	c.vcvtps2pd(scratch, Xbyak::Xmm(src));
+	c.vsqrtpd(scratch, scratch);
+	c.vbroadcastsd(Xbyak::Ymm(dst), ptr[rip + one]); // src is consumed, dst is overwritten
+	c.vdivpd(scratch, Xbyak::Ymm(dst), scratch);
+	c.vcvtpd2ps(Xbyak::Xmm(dst), scratch); // VEX encoding clears the upper YMM half
+	c.ldmxcsr(ptr[rsp + 32]);
+	c.vmovdqu(scratch, ptr[rsp]);
+	c.lea(rsp, ptr[rsp + 48]);
+	c.lea(rsp, ptr[rsp + GuestRedZoneSize]);
+	c.jmp(done);
+	c.L(one);
+	c.dq(0x3ff0000000000000ULL);
+	c.L(done);
+}
+
 void CollectRedZoneMemoryInstructions(const DecodedFunction& function,
                                       std::map<uintptr_t, InstructionRewrite>& rewrite_sites,
                                       RedZonePatchResult& result) {
@@ -796,6 +835,10 @@ void CollectReciprocalSquareRoots(const DecodedFunction& function,
 		if (protect_red_zone) {
 			rewrite_sites[address].protect_red_zone = true;
 		}
+		static const bool trap_only = std::getenv("KYTY_RSQRT_TRAP") != nullptr;
+		if (!trap_only) {
+			rewrite_sites[address].emulate_rsqrt = true;
+		}
 	}
 }
 
@@ -812,10 +855,17 @@ uint64_t ApplyReciprocalSquareRootPatches(const PatchModule& module,
 	}
 
 	uint64_t patched = 0;
+	uint64_t native  = 0;
 	for (const auto& site: sites) {
 		if (!module.patched.contains(reinterpret_cast<u8*>(site.address))) {
 			patched += X64InstructionEmulator::PatchReciprocalSquareRoots(site.address, site.length);
+		} else {
+			++native;
 		}
+	}
+	if (!sites.empty()) {
+		LOGF("VRSQRTPS patching: found=%zu, native=%" PRIu64 ", trapped=%" PRIu64 "\n", sites.size(),
+		     native, patched);
 	}
 	return patched +
 	       X64InstructionEmulator::PatchReciprocalSquareRoots(trampoline_addr, trampoline_size);
@@ -847,7 +897,11 @@ void RelocateRedZoneInstructions(PatchModule* module, const DecodedFunction& fun
 				if (protect_red_zone) {
 					module->trampoline_gen.lea(rsp, ptr[rsp - GuestRedZoneSize]);
 				}
-				if (protected_indirect_call) {
+				const bool emulate_rsqrt =
+				    rewrite != rewrite_sites.end() && rewrite->second.emulate_rsqrt;
+				if (emulate_rsqrt) {
+					GenerateReciprocalSquareRoot(*decoded, module->trampoline_gen);
+				} else if (protected_indirect_call) {
 					if (!GenerateProtectedIndirectCall(*decoded, module->trampoline_gen)) {
 						module->trampoline_gen.setSize(trampoline_offset);
 						return std::nullopt;
