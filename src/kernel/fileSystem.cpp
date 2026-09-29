@@ -349,14 +349,38 @@ static bool IsHostForbiddenFilenameCharacter(unsigned char ch) {
 	       Forbidden.find(static_cast<char>(ch)) != std::string_view::npos;
 }
 
-static int UpperHexDigitValue(char ch) {
+// Characters EncodeHostFilename may store as %XX: forbidden ones, a '%' that would otherwise read
+// as an escape, and a trailing '.' or ' ' that Windows would strip from a path component.
+static bool IsHostEscapedCharacter(unsigned char ch) {
+	return IsHostForbiddenFilenameCharacter(ch) || ch == '%' || ch == '.' || ch == ' ';
+}
+
+static int HexDigitValue(char ch) {
 	if (ch >= '0' && ch <= '9') {
 		return ch - '0';
 	}
 	if (ch >= 'A' && ch <= 'F') {
 		return ch - 'A' + 10;
 	}
+	if (ch >= 'a' && ch <= 'f') {
+		return ch - 'a' + 10;
+	}
 	return -1;
+}
+
+// Returns the character that the escape at text[pos] stands for, or -1 if there is none there.
+// Hex digits match in either case because NTFS compares names case-insensitively.
+static int DecodeHostEscape(std::string_view text, size_t pos) {
+	if (text[pos] != '%' || pos + 2 >= text.size()) {
+		return -1;
+	}
+	const int high = HexDigitValue(text[pos + 1]);
+	const int low  = HexDigitValue(text[pos + 2]);
+	if (high < 0 || low < 0) {
+		return -1;
+	}
+	const auto ch = static_cast<unsigned char>((high << 4) | low);
+	return IsHostEscapedCharacter(ch) ? ch : -1;
 }
 
 std::string EncodeHostFilename(std::string_view guest_name) {
@@ -364,14 +388,26 @@ std::string EncodeHostFilename(std::string_view guest_name) {
 
 	std::string out;
 	out.reserve(guest_name.size());
-	for (const char c: guest_name) {
-		const auto ch = static_cast<unsigned char>(c);
-		if (IsHostForbiddenFilenameCharacter(ch)) {
+	size_t component_begin = 0;
+	for (size_t i = 0; i < guest_name.size(); i++) {
+		const auto ch     = static_cast<unsigned char>(guest_name[i]);
+		bool       escape = IsHostForbiddenFilenameCharacter(ch);
+		if (ch == '%') {
+			escape = DecodeHostEscape(guest_name, i) >= 0;
+		} else if (ch == '.' || ch == ' ') {
+			const bool component_end = i + 1 == guest_name.size() || guest_name[i + 1] == '/';
+			const auto component     = guest_name.substr(component_begin, i + 1 - component_begin);
+			escape                   = component_end && component != "." && component != "..";
+		} else if (ch == '/') {
+			component_begin = i + 1;
+		}
+
+		if (escape) {
 			out += '%';
 			out += Hex[ch >> 4u];
 			out += Hex[ch & 0xfu];
 		} else {
-			out += c;
+			out += static_cast<char>(ch);
 		}
 	}
 	return out;
@@ -381,19 +417,12 @@ std::string DecodeHostFilename(std::string_view host_name) {
 	std::string out;
 	out.reserve(host_name.size());
 	for (size_t i = 0; i < host_name.size(); i++) {
-		if (host_name[i] == '%' && i + 2 < host_name.size()) {
-			const int high = UpperHexDigitValue(host_name[i + 1]);
-			const int low  = UpperHexDigitValue(host_name[i + 2]);
-			if (high >= 0 && low >= 0) {
-				const auto ch = static_cast<unsigned char>((high << 4) | low);
-				if (IsHostForbiddenFilenameCharacter(ch)) {
-					out += static_cast<char>(ch);
-					i += 2;
-					continue;
-				}
-			}
+		if (const int ch = DecodeHostEscape(host_name, i); ch >= 0) {
+			out += static_cast<char>(ch);
+			i += 2;
+		} else {
+			out += host_name[i];
 		}
-		out += host_name[i];
 	}
 	return out;
 }

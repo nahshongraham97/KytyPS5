@@ -29,6 +29,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace Libs::LibKernelApr {
@@ -390,25 +391,58 @@ void CheckHostFilenameEncoding() {
             FileSystem::EncodeHostFilename("foo_bar"),
         "distinct guest names keep distinct host names");
 
+  Check(FileSystem::EncodeHostFilename("save%3A.dat") == "save%253A.dat" &&
+            FileSystem::EncodeHostFilename("x%3a") == "x%253a",
+        "escape a literal '%' that would read as an escape");
+  Check(FileSystem::EncodeHostFilename("save.") == "save%2E" &&
+            FileSystem::EncodeHostFilename("save:.") == "save%3A%2E" &&
+            FileSystem::EncodeHostFilename("dir. /a ") == "dir.%20/a%20" &&
+            FileSystem::EncodeHostFilename("...") == "..%2E",
+        "escape a trailing '.' or ' ' that Windows would strip");
+
   for (const std::string_view name :
-       {std::string_view("dir/100%_done.dat"), std::string_view("%3A.dat"),
-        std::string_view("asset-\xc3\xa9.bin"), std::string_view("")}) {
+       {std::string_view("dir/100%_done.dat"), std::string_view("50%off"),
+        std::string_view("asset-\xc3\xa9.bin"), std::string_view("a/../b/./c"),
+        std::string_view(".."), std::string_view("")}) {
     Check(FileSystem::EncodeHostFilename(name) == name,
           "valid host names keep their existing path");
   }
   for (const std::string_view name :
-       {SaveName, std::string_view("a:b/c?d*e"), std::string_view("50%:off"),
-        std::string_view("<\x01>")}) {
-    Check(FileSystem::DecodeHostFilename(
-              FileSystem::EncodeHostFilename(name)) == name,
-          "decode reverses encode");
-  }
-  for (const std::string_view name :
-       {std::string_view("100%25"), std::string_view("%41"),
-        std::string_view("%3a"), std::string_view("end%3"),
-        std::string_view("end%"), std::string_view("%00")}) {
+       {std::string_view("%41"), std::string_view("end%3"),
+        std::string_view("end%"), std::string_view("%00"),
+        std::string_view("%zz")}) {
     Check(FileSystem::DecodeHostFilename(name) == name,
-          "decode leaves escapes of allowed characters untouched");
+          "decode leaves non-escapes untouched");
+  }
+
+  // Every short name over an alphabet of escape fragments must round-trip, and
+  // no two names that differ beyond letter case (NTFS ignores case) may share a
+  // host name or leave a host component ending in '.' or ' '.
+  constexpr std::string_view Alphabet = "%3Aa2:. /";
+  std::vector<std::string> names{""};
+  for (size_t begin = 0, length = 1; length <= 4; length++) {
+    const size_t end = names.size();
+    for (size_t i = begin; i < end; i++) {
+      for (const char c : Alphabet) {
+        names.push_back(names[i] + c);
+      }
+    }
+    begin = end;
+  }
+  std::unordered_map<std::string, std::string> owners;
+  for (const auto &name : names) {
+    const auto host = FileSystem::EncodeHostFilename(name);
+    Check(FileSystem::DecodeHostFilename(host) == name,
+          "decode reverses encode for every short name");
+    for (const auto &component : Common::Split(host, "/")) {
+      Check(component == "." || component == ".." ||
+                (!component.ends_with('.') && !component.ends_with(' ')),
+            "no host component ends in '.' or ' '");
+    }
+    const auto [owner, inserted] =
+        owners.emplace(Common::ToLower(host), Common::ToLower(name));
+    Check(inserted || owner->second == Common::ToLower(name),
+          "distinct guest names never share a host name");
   }
 }
 
