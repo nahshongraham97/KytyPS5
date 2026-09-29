@@ -49,6 +49,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
     [string]$Game,
 
     [string]$Emulator,
@@ -85,10 +86,36 @@ function Find-KytyEmulator {
     return $null
 }
 
-if (-not (Test-Path -LiteralPath $Game)) { throw "Game not found: $Game" }
+try {
+    $gameExists = Test-Path -LiteralPath $Game
+} catch {
+    # Test-Path throws rather than returning false for paths with characters
+    # Windows forbids, such as the angle brackets in documentation examples.
+    throw "Game path is not a valid Windows path: $Game`n$($_.Exception.Message)"
+}
+if (-not $gameExists) { throw "Game not found: $Game" }
 $Game = (Resolve-Path -LiteralPath $Game).Path
 
 if ($Clean) { $Build = $true }
+
+# Kyty wants the directory that directly contains eboot.bin. PS5 dumps often
+# nest it (for example <game>\<titleid>-app0\eboot.bin), so look a few
+# levels down rather than making the caller find the exact folder.
+function Resolve-GameDir([string]$path) {
+    if (Test-Path -LiteralPath (Join-Path $path 'eboot.bin') -PathType Leaf) { return $path }
+    $found = Get-ChildItem -LiteralPath $path -Recurse -Depth 3 -File -Filter 'eboot.bin' -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+    if ($found) { return (Split-Path -Parent $found) }
+    return $path
+}
+
+if (Test-Path -LiteralPath $Game -PathType Container) {
+    $resolved = Resolve-GameDir $Game
+    if ($resolved -ne $Game) {
+        Write-Info "Using nested game folder: $resolved"
+        $Game = $resolved
+    }
+}
 
 # Default RepoPath to the folder holding this script, but only when it is a
 # real checkout. Scripts copied into an arbitrary folder must not be mistaken
