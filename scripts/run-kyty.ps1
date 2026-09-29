@@ -22,8 +22,9 @@
     auto-detection.
 
 .PARAMETER RepoPath
-    KytyPS5 source checkout, used only with -Build.
-    Default: $env:USERPROFILE\KytyPS5
+    KytyPS5 source checkout, used only with -Build. Defaults to the folder
+    containing this script when it looks like a checkout, so the script works
+    whether it sits in a git clone or in a folder of downloaded scripts.
 
 .PARAMETER Build
     Configure and build this checkout instead of using a release binary.
@@ -51,7 +52,7 @@ param(
     [string]$Game,
 
     [string]$Emulator,
-    [string]$RepoPath = (Join-Path $env:USERPROFILE 'KytyPS5'),
+    [string]$RepoPath,
     [switch]$Build,
     [switch]$Clean,
     [string[]]$ExtraArgs = @(),
@@ -89,13 +90,29 @@ $Game = (Resolve-Path -LiteralPath $Game).Path
 
 if ($Clean) { $Build = $true }
 
+# Default RepoPath to the folder holding this script, but only when it is a
+# real checkout. Scripts copied into an arbitrary folder must not be mistaken
+# for one.
+if (-not $RepoPath) {
+    $scriptDir = Split-Path -Parent $PSCommandPath
+    $RepoPath  = if (Test-Path -LiteralPath (Join-Path $scriptDir 'CMakeLists.txt')) {
+        $scriptDir
+    } else {
+        # In a clone this script lives in <repo>\scripts, so try one level up.
+        Split-Path -Parent $scriptDir
+    }
+}
+if ($Build -and -not (Test-Path -LiteralPath (Join-Path $RepoPath 'CMakeLists.txt'))) {
+    Write-Warn2 "No CMakeLists.txt in $RepoPath"
+    Write-Warn2 'Point -RepoPath at the KytyPS5 git clone, or clone it first:'
+    Write-Warn2 "    git clone --recurse-submodules https://github.com/nahshongraham97/KytyPS5.git $RepoPath"
+    throw "Not a KytyPS5 checkout: $RepoPath"
+}
+
 $exe = $null
 
 if ($Build) {
     Write-Step 'Building KytyPS5'
-    if (-not (Test-Path -LiteralPath (Join-Path $RepoPath 'CMakeLists.txt'))) {
-        throw "Not a KytyPS5 checkout: $RepoPath"
-    }
     foreach ($tool in @('cmake', 'ninja', 'clang-cl', 'glslangValidator')) {
         if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
             Write-Warn2 "missing $tool on PATH (run from an x64 Native Tools / Developer PowerShell)"
