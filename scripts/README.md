@@ -87,15 +87,27 @@ them.
 
 ### Which came first
 
-The "`... is not a valid runtime value`" family is older than every published
-release. First introduced by `af8aecf` (*"shader: remove recompiler error-string
-propagation"*, 2026-08-31), reworked by `98200fe` (2026-09-03), and extended by
-`b2a80a3` (2026-09-22) with the GPU-selected variant. `b2a80a3` did **not**
-introduce the failure — the 09-12 build already had it, on a different shader.
+There are two separate checks, both of which abort the process:
 
-Between 09-12 and 09-29 something resolved `0x4284fbe48eca0a01` (the later build
-gets past it and plays video), leaving `0xb9da5e64f4c5b10a` as the sole
-remaining blocker.
+1. `"<opcode> dword <n> is not a valid runtime value"` — introduced by `af8aecf`
+   (2026-08-31, *shader: remove recompiler error-string propagation*), reworked
+   by `98200fe` (2026-09-03). This is what fails on 09-12, on shader
+   `0x4284fbe48eca0a01`.
+
+2. `"buffer descriptor is not a valid runtime value; GPU-selected access requires
+   a raw DWORD x2/x4 load"` — introduced by `b2a80a3` (2026-09-22, *Resolve
+   GPU-selected raw buffer descriptors through shared RDNA2 addressing*), with
+   the guard written inline as `memory.kind != Buffer || formatted || typed ||
+   (op != LoadBufferU32x2 && op != LoadBufferU32x4)`. `392f39e` (2026-09-24,
+   *shader: support indirect BUFFER_LOAD_DWORDX3*) pulled that guard out into
+   `MemoryInfo::SupportsIndirectBufferLoad`, added `LoadBufferU32x3`, and changed
+   the message to `x2/x3/x4`. This is what fails on 09-29, on shader
+   `0xb9da5e64f4c5b10a`.
+
+So `b2a80a3` did introduce the *current* blocker, but not the abort itself: the
+09-12 build already died on check 1. Between 09-12 and 09-29 check 1 stopped
+firing for `0x4284fbe48eca0a01` (the later build gets past it and plays video),
+leaving `0xb9da5e64f4c5b10a` as the sole remaining blocker.
 
 ### The current blocker
 

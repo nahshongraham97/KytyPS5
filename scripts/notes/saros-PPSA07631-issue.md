@@ -69,17 +69,25 @@ progress — and `0xb9da5e64f4c5b10a` now blocks the same point.
 | `KytyPS5-2026-09-12-d3d7bd3` | none | `0x4284fbe48eca0a01` @ pc `0x26c` | `GetBufferResource dword 0 is not a valid runtime value` |
 | `KytyPS5-2026-09-29-6799ecb` | 2 | `0xb9da5e64f4c5b10a` @ pc `0x84` | `buffer descriptor is not a valid runtime value; GPU-selected access requires a raw DWORD x2/x3/x4 load` |
 
-### Not a regression from b2a80a3
+### Two separate checks
 
-The `... is not a valid runtime value` family predates every published release:
+Both abort the process, and they are unrelated:
 
-- `af8aecf` (2026-08-31, *shader: remove recompiler error-string propagation*) —
-  introduced it
-- `98200fe` (2026-09-03) — reworked it
-- `b2a80a3` (2026-09-22) — added the GPU-selected wording
+1. `"<opcode> dword <n> is not a valid runtime value"` — introduced by `af8aecf`
+   (2026-08-31), reworked by `98200fe` (2026-09-03). The 09-12 build dies here,
+   at the `ReadConstBuffer` descriptor case (`ResourceTracking.cpp:471/478`).
 
-`b2a80a3` is not the origin: 09-12 already had the check, at a different call
-site (`ResourceTracking.cpp:471/478`, the `ReadConstBuffer` descriptor case).
+2. `"buffer descriptor is not a valid runtime value; GPU-selected access requires
+   a raw DWORD x2/x4 load"` — introduced by `b2a80a3` (2026-09-22). The guard was
+   inline: `memory.kind != Buffer || formatted || typed || (op != LoadBufferU32x2
+   && op != LoadBufferU32x4)`. Then `392f39e` (2026-09-24, *shader: support
+   indirect BUFFER_LOAD_DWORDX3*) extracted it into
+   `MemoryInfo::SupportsIndirectBufferLoad`, added `LoadBufferU32x3`, and changed
+   the wording to `x2/x3/x4`. The 09-29 build dies here.
+
+So `b2a80a3` introduced the current blocker but not the abort itself — 09-12
+already died on check 1. Between the two builds check 1 stopped firing for
+`0x4284fbe48eca0a01`, which is why 09-29 plays the intro videos.
 
 ### Current blocker
 
@@ -98,9 +106,20 @@ if (memory.kind != ResourceKind::Buffer || !memory.SupportsIndirectBufferLoad(op
 }
 ```
 
-Only raw `BUFFER_LOAD_DWORDX2/3/4` are accepted (`392f39e` added `X3` on
-2026-09-24). The disassembly around pc `0x84` shows `BUFFER_LOAD_FORMAT_X` with
-`idxen` — a typed, single-dword access — which the guard rejects outright.
+The guard is `memory.kind != Buffer || !SupportsIndirectBufferLoad(op)`, and
+`SupportsIndirectBufferLoad` accepts only raw 32-bit untyped x2/x3/x4 loads:
+
+```cpp
+[[nodiscard]] bool SupportsIndirectBufferLoad(ValueOpcode opcode) const {
+        return !formatted && !typed && data_bits == 32u &&
+               (opcode == ValueOpcode::LoadBufferU32x2 || opcode == ValueOpcode::LoadBufferU32x3 ||
+                opcode == ValueOpcode::LoadBufferU32x4);
+}
+```
+
+Either the descriptor did not resolve (`GetHandle` failed, so `memory.kind` is
+not `Buffer`), or the access is typed / single-dword. A `_kyty.txt` with the
+disassembly around pc `0x84` for hash `0xb9da5e64f4c5b10a` would confirm which.
 
 These are hard `Fail()` calls that run `EXIT()` then `std::abort()`, so no flag
 or config avoids them.
