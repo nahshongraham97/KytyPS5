@@ -246,6 +246,30 @@ uint32_t LoadBda(ValueEmitContext& ctx, uint32_t address, uint32_t active, uint3
 	});
 }
 
+void StoreBdaDword(ValueEmitContext& ctx, uint32_t address, uint32_t data) {
+	auto&      state   = ctx.state;
+	const auto bda     = GetBdaPointer(ctx, address);
+	const auto present =
+	    Binary(state, spv::OpINotEqual, TypeBool(state), bda, ConstantDeviceAddress(state, 0));
+	EmitIfCondition(state, present, [&]() {
+		const auto pointer = state.builder.AllocateId();
+		state.builder.AddFunction(spv::OpConvertUToPtr, TypePhysicalU32Pointer(state), pointer,
+		                          bda);
+		constexpr uint32_t alignment = sizeof(uint32_t);
+		state.builder.AddFunction(spv::OpStore, pointer, data,
+		                          spv::MemoryAccessAlignedMask, alignment);
+	});
+}
+
+void StoreBda(ValueEmitContext& ctx, uint32_t address, uint32_t data, uint32_t active) {
+	auto& state = ctx.state;
+	EmitIfCondition(state, active, [&]() {
+		const auto aligned = Binary(state, spv::OpBitwiseAnd, TypeScalarU64(state), address,
+		                            ConstantDeviceAddress(state, ~uint64_t {3}));
+		StoreBdaDword(ctx, aligned, data);
+	});
+}
+
 uint32_t ByteAddress(ValueEmitContext& ctx, const IR::Inst& inst, const IR::MemoryInfo& mem) {
 	if (mem.kind == IR::ResourceKind::Buffer) {
 		return BufferByteAddress(ctx, inst, mem);
@@ -859,6 +883,86 @@ uint32_t LoadIndirectBuffer(ValueEmitContext& ctx, const IR::Inst& inst, uint32_
 	return components == 1u ? values[0] : ConstructU32Composite(state, components, values);
 }
 
+void StoreIndirectBuffer(ValueEmitContext& ctx, const IR::Inst& inst, uint32_t components) {
+	auto& state = ctx.state;
+	EmitIfCondition(state, ctx.Arg(inst, inst.NumArgs() - 1), [&]() {
+		const auto& handle  = *inst.Arg(0).ResolveInstruction();
+		const auto  word1   = ctx.Arg(handle, 1);
+		const auto  records = ctx.Arg(handle, 2);
+		const auto  word3   = ctx.Arg(handle, 3);
+		const auto  field   = [&](uint32_t word, uint32_t first, uint32_t count) {
+			return EmitBitFieldUExtract(state, word, ConstantU32(state, first),
+			                            ConstantU32(state, count));
+		};
+		const auto nonzero = [&](uint32_t value) {
+			return Binary(state, spv::OpINotEqual, TypeBool(state), value, ConstantU32(state, 0));
+		};
+		const auto has_dword = [&](uint32_t offset, uint32_t size) {
+			return AndCondition(
+			    state,
+			    Binary(state, spv::OpUGreaterThanEqual, TypeBool(state), size, ConstantU32(state, 4)),
+			    Binary(state, spv::OpULessThanEqual, TypeBool(state), offset,
+			           Binary(state, spv::OpISub, TypeU32(state), size, ConstantU32(state, 4))));
+		};
+		const auto stride       = field(word1, 16, 14);
+		const auto swizzle      = AndCondition(state, nonzero(stride), nonzero(field(word1, 31, 1)));
+		const auto index_stride = field(word3, 21, 2);
+		const auto add_tid      = nonzero(field(word3, 23, 1));
+		const auto index =
+		    Binary(state, spv::OpIAdd, TypeU32(state), ctx.Arg(inst, 1),
+		           Select(state, TypeU32(state), add_tid, BufferLane(state), ConstantU32(state, 0)));
+		const auto soffset = ctx.Arg(inst, 3);
+		const auto base    = DeviceAddressFromWords(state, ctx.Arg(handle, 0), field(word1, 0, 16));
+		const auto valid_format    = nonzero(field(word3, 12, 7));
+		const auto mode            = field(word3, 28, 2);
+		const auto index_in_bounds = Binary(state, spv::OpULessThan, TypeBool(state), index, records);
+		const auto scalar_in_bounds =
+		    Binary(state, spv::OpULessThanEqual, TypeBool(state), soffset, records);
+		const auto raw_records = Binary(state, spv::OpISub, TypeU32(state), records, soffset);
+		const auto raw_index_in_bounds =
+		    Binary(state, spv::OpULessThan, TypeBool(state), index, raw_records);
+		const auto composite = ctx.Arg(inst, inst.NumArgs() - 2);
+		for (uint32_t component = 0; component < components; component++) {
+			const auto address = CalculateBufferAddress(state, index, ctx.Arg(inst, 2), soffset,
+			                                            ctx.Memory(inst).offset + component * 4u,
+			                                            stride, swizzle, index_stride);
+			// RDNA2 raw DWORD vectors check each component, unlike formatted accesses.
+			const auto structured_bounds =
+			    AndCondition(state, index_in_bounds,
+			                 Binary(state, spv::OpULessThan, TypeBool(state), address.offset, stride));
+			// OOB_SELECT=3 reduces NUM_RECORDS by SOFFSET before the offset/index check.
+			const auto raw_bounds = AndCondition(
+			    state, scalar_in_bounds,
+			    Select(state, TypeBool(state), swizzle,
+			           AndCondition(state, raw_index_in_bounds, has_dword(address.offset, stride)),
+			           has_dword(address.offset, raw_records)));
+			auto in_bounds =
+			    Select(state, TypeBool(state),
+			           Binary(state, spv::OpIEqual, TypeBool(state), mode, ConstantU32(state, 0)),
+			           structured_bounds, index_in_bounds);
+			in_bounds = Select(
+			    state, TypeBool(state),
+			    Binary(state, spv::OpULessThan, TypeBool(state), mode, ConstantU32(state, 2)),
+			    in_bounds,
+			    Select(state, TypeBool(state),
+			           Binary(state, spv::OpIEqual, TypeBool(state), mode, ConstantU32(state, 2)),
+			           nonzero(records), raw_bounds));
+			const auto guest =
+			    Binary(state, spv::OpIAdd, TypeScalarU64(state), base,
+			           Unary(state, spv::OpUConvert, TypeScalarU64(state), address.byte));
+			uint32_t data;
+			if (components == 1u) {
+				data = composite;
+			} else {
+				data = state.builder.AllocateId();
+				state.builder.AddFunction(spv::OpCompositeExtract, TypeU32(state), data, composite,
+				                          component);
+			}
+			StoreBda(ctx, guest, data, AndCondition(state, valid_format, in_bounds));
+		}
+	});
+}
+
 uint32_t LoadWideBuffer(ValueEmitContext& ctx, const IR::Inst& inst, uint32_t components) {
 	auto& state = ctx.state;
 	return EmitValueOrDefaultIfCondition(
@@ -895,8 +999,12 @@ uint32_t LoadWideBuffer(ValueEmitContext& ctx, const IR::Inst& inst, uint32_t co
 
 void StoreWideBuffer(ValueEmitContext& ctx, const IR::Inst& inst, uint32_t components) {
 	auto& state = ctx.state;
+	const auto mem = ctx.Memory(inst);
+	if (mem.kind == IR::ResourceKind::IndirectBuffer) {
+		StoreIndirectBuffer(ctx, inst, components);
+		return;
+	}
 	EmitIfCondition(state, ctx.Arg(inst, inst.NumArgs() - 1), [&]() {
-		const auto mem       = ctx.Memory(inst);
 		const auto resource  = PrepareMemoryResourceAccess(state, mem);
 		const auto composite = ctx.Arg(inst, inst.NumArgs() - 2);
 		const auto info = Format::GetFormatInfo(
@@ -1277,6 +1385,8 @@ void EmitStoreMemory(ValueEmitContext& ctx, const IR::Inst& inst) {
 		StoreWideBuffer(ctx, inst, buffer_components);
 	else if (shared_components > 1u)
 		StoreWideShared(ctx, inst, shared_components);
+	else if (mem.kind == IR::ResourceKind::IndirectBuffer)
+		StoreIndirectBuffer(ctx, inst, 1u);
 	else if (op == IR::ValueOpcode::StoreBufferU32 && mem.formatted)
 		FormattedStore(ctx, inst, mem);
 	else if (type == IR::Type::U8)

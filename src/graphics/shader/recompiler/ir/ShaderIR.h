@@ -70,13 +70,23 @@ struct MemoryInfo {
 	bool                    coherent                                              = false;
 	bool                    planning_only                                         = false;
 
-	// Which buffer loads the GPU-selected (indirect) path can serve. Its emitter is
+	// Which buffer accesses the GPU-selected (indirect) path can serve. Its emitter is
 	// component-generic, so every raw 32-bit width works; only formatted/typed
 	// accesses still need a descriptor that resolves at compile time.
 	[[nodiscard]] bool SupportsIndirectBufferLoad(ValueOpcode opcode) const {
 		return !formatted && !typed && data_bits == 32u &&
 		       (opcode == ValueOpcode::LoadBufferU32 || opcode == ValueOpcode::LoadBufferU32x2 ||
 		        opcode == ValueOpcode::LoadBufferU32x3 || opcode == ValueOpcode::LoadBufferU32x4);
+	}
+
+	[[nodiscard]] bool SupportsIndirectBufferStore(ValueOpcode opcode) const {
+		return !formatted && !typed && data_bits == 32u &&
+		       (opcode == ValueOpcode::StoreBufferU32 || opcode == ValueOpcode::StoreBufferU32x2 ||
+		        opcode == ValueOpcode::StoreBufferU32x3 || opcode == ValueOpcode::StoreBufferU32x4);
+	}
+
+	[[nodiscard]] bool SupportsIndirectBufferAccess(ValueOpcode opcode) const {
+		return SupportsIndirectBufferLoad(opcode) || SupportsIndirectBufferStore(opcode);
 	}
 
 	bool operator==(const MemoryInfo& other) const = default;

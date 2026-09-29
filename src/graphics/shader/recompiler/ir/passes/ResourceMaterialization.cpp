@@ -684,7 +684,7 @@ static std::vector<ResourceBlock> ResourceControlFlow(const Program& program) {
 				continue;
 			}
 			const auto& memory = program.memory_info.at(inst.Flags<MemoryFlags>().index);
-			if (memory.planning_only) {
+			if (memory.planning_only || memory.kind == ResourceKind::IndirectBuffer) {
 				continue;
 			}
 			if (buffer != BufferAccess::None) {
@@ -789,6 +789,7 @@ static UniformFillPlan AnalyzeUniformFill(const Program& program) {
 		if (buffer.read && (!buffer.scalar || buffer.written)) return {};
 	}
 	const auto& memory = program.memory_info.at(store->Flags<MemoryFlags>().index);
+	if (memory.kind == ResourceKind::IndirectBuffer) return {};
 	UniformFillPlan result;
 	result.fill.resource = memory.resource;
 	Value data;

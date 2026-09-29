@@ -3211,6 +3211,30 @@ void TestGpuSelectedUserDataScalarBufferDescriptor() {
         "GPU-selected user-data buffer descriptor did not become an indirect buffer");
 }
 
+void TestGpuSelectedScalarBufferDescriptorStore() {
+  Fixture fixture;
+  const auto heap = fixture.BufferResource(0);
+  const auto heap_flags = fixture.AddMemory({}, 0x10);
+  std::array<Value, 4> words {};
+  for (uint32_t dword = 0; dword < 4; ++dword) {
+    words[dword] = fixture.Emit(ValueOpcode::ReadConstBuffer,
+                                {heap, Value(dword * 4u)},
+                                heap_flags);
+  }
+  const auto descriptor = fixture.Buffer(words, 0x84);
+  MemoryInfo memory;
+  memory.kind = ResourceKind::Buffer;
+  const auto flags = fixture.AddMemory(memory, 0x84);
+  fixture.Emit(ValueOpcode::StoreBufferU32,
+               {descriptor, Value(0u), Value(0u), Value(0u), Value(1234u), Value(true)},
+               flags);
+  fixture.PlanAndTrack();
+  Check(fixture.program.memory_info[flags.index].kind ==
+            ResourceKind::IndirectBuffer &&
+            fixture.program.resource_tracking_complete,
+        "GPU-selected scalar buffer descriptor store did not become an indirect buffer");
+}
+
 int main() {
   try {
     const auto Run = [](const char *name, auto test) {
@@ -3253,6 +3277,7 @@ int main() {
     Run("malformed memory kinds", TestMalformedMemoryKindsRejected);
     Run("gpu-selected scalar buffer", TestGpuSelectedScalarBufferDescriptor);
     Run("gpu-selected user data buffer", TestGpuSelectedUserDataScalarBufferDescriptor);
+    Run("gpu-selected scalar buffer store", TestGpuSelectedScalarBufferDescriptorStore);
   } catch (const std::exception &exception) {
     std::cerr << "resource tracking test failed: " << exception.what() << '\n';
     return 1;
