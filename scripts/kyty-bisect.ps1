@@ -4,9 +4,11 @@
 
 .DESCRIPTION
     KytyPS5 aborts during the language-selection step for some titles. This
-    downloads a list of known-good/known-bad KytyPS5 builds side by side, runs
-    each against the same game folder, and keeps the console output plus the
-    emulator's own log so the failure can be compared across builds.
+    downloads a list of builds side by side, runs each against the same game
+    folder, and keeps the console output plus the emulator's own log so the
+    failure can be compared across builds. The abort has so far been present in
+    every release, so compare how far each build gets rather than expecting a
+    clean pass.
 
     Each build extracts to <Root>\builds\<tag> and its logs stay inside that
     folder, so nothing overwrites anything else.
@@ -23,7 +25,8 @@
 
 .PARAMETER Tag
     One or more KytyPS5 release tags to test, newest first. Defaults to a set
-    that brackets the 2026-09-21 change to shader resource tracking.
+    spanning 2026-09-12 to 2026-09-29, the range in which the Saros abort moved
+    from one shader to another.
 
 .PARAMETER ExtraArgs
     Extra arguments passed through to kyty_emulator.exe, e.g.
@@ -37,8 +40,8 @@
     Re-extract a build even when its folder already exists.
 
 .PARAMETER StopOnSuccess
-    Stop at the first build that gets past the resource-tracking abort. Use this
-    to find the newest usable build without downloading the rest.
+    Stop at the first build that produces no resource-tracking abort. No known
+    release passes today, so this normally runs the whole list.
 
 .EXAMPLE
     .\kyty-bisect.ps1 -Game 'D:\Games\SAROS-PPSA07631' -Redownload

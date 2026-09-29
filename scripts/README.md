@@ -54,42 +54,89 @@ cmake --build _Build/windows --target kyty_emulator --parallel
 .\scripts\run-kyty.ps1 -Game 'D:\Games\SAROS-PPSA07631'
 ```
 
+`--game` must be the directory that **directly** contains `eboot.bin`; Kyty
+mounts that directory as `/app0`. Dumps often nest it (for example
+`<game>\PPSA07631-app0\eboot.bin`), so `run-kyty.ps1` descends up to three
+levels and uses the folder it finds.
+
 Kyty aborts the process on *any* Vulkan validation error, so the scripts pass
-`--vulkan-validation false` unless `-VulkanValidation` is given.
+`--vulkan-validation false` unless `-VulkanValidation` is given. With validation
+enabled, Saros dies earlier on a `vkAcquireNextImageKHR` semaphore VUID.
 
 Kyty writes its logs relative to the working directory:
 
-- `_kyty.txt` — emulator log
+- `_kyty.txt` — emulator log (the useful one; it can reach tens of MB)
 - `_Shaders\` — shader dumps
 - `_PipelineCache\` — Kyty-only Vulkan pipeline cache (`_PipelineCache\<titleid>.bin`).
   Not consumable by AnyPS5.
 
-## Known issue: abort at the language-select step
+## Saros (PPSA07631): aborts at the language-select step
 
-Titles such as SAROS (`PPSA07631`) abort once the intro movies finish:
+Intro videos play, then the game aborts once it asks for a language. Every
+available release fails; the failure moved between builds but never went away.
 
+| Build | Videos | Failing shader | Message |
+| --- | --- | --- | --- |
+| `KytyPS5-2026-09-12-d3d7bd3` | none | `0x4284fbe48eca0a01` @ pc `0x26c` | `GetBufferResource dword 0 is not a valid runtime value` |
+| `KytyPS5-2026-09-29-6799ecb` | 2 | `0xb9da5e64f4c5b10a` @ pc `0x84` | `buffer descriptor is not a valid runtime value; GPU-selected access requires a raw DWORD x2/x3/x4 load` |
+
+Both are hard `Fail()` calls in
+`src/graphics/shader/recompiler/ir/passes/ResourceTracking.cpp` — they call
+`EXIT()` then `std::abort()`, so they are not configurable and no flag avoids
+them.
+
+### Which came first
+
+The "`... is not a valid runtime value`" family is older than every published
+release. First introduced by `af8aecf` (*"shader: remove recompiler error-string
+propagation"*, 2026-08-31), reworked by `98200fe` (2026-09-03), and extended by
+`b2a80a3` (2026-09-22) with the GPU-selected variant. `b2a80a3` did **not**
+introduce the failure — the 09-12 build already had it, on a different shader.
+
+Between 09-12 and 09-29 something resolved `0x4284fbe48eca0a01` (the later build
+gets past it and plays video), leaving `0xb9da5e64f4c5b10a` as the sole
+remaining blocker.
+
+### The current blocker
+
+The 09-29 message comes from the `SupportsIndirectBufferLoad` guard:
+
+```cpp
+// src/graphics/shader/recompiler/ir/ShaderIR.h
+[[nodiscard]] bool SupportsIndirectBufferLoad(ValueOpcode opcode) const {
+        return !formatted && !typed && data_bits == 32u && ...
 ```
-shader resource tracking: hash=0xb9da5e64f4c5b10a stage=compute pc=0x00000084
-buffer descriptor is not a valid runtime value; GPU-selected access requires a raw DWORD x2/x3/x4 load
+
+```cpp
+// src/graphics/shader/recompiler/ir/passes/ResourceTracking.cpp
+if (memory.kind != ResourceKind::Buffer || !memory.SupportsIndirectBufferLoad(op)) {
+        Fail(flags.pc,
+             "buffer descriptor is not a valid runtime value; GPU-selected access "
+             "requires a raw DWORD x2/x3/x4 load");
+}
 ```
 
-This is a hard `Fail()` in
-`src/graphics/shader/recompiler/ir/passes/ResourceTracking.cpp`, not a config
-toggle.
+Only raw `BUFFER_LOAD_DWORDX2/3/4` are accepted. `392f39e` (2026-09-24) added
+`X3`; x1 and typed (`BUFFER_LOAD_FORMAT_*`) accesses are still rejected.
 
-History:
+The older 09-12 failure came from a different call site that rejects a
+`ReadConstBuffer` dword in a descriptor:
 
-- The fatal check was introduced by `b2a80a3` (2026-09-21, *"Resolve
-  GPU-selected raw buffer descriptors through shared RDNA2 addressing"*). Builds
-  from 2026-09-20 and earlier do not contain it, which is why the 09-12 build
-  referenced in upstream issue #260 reached the main menu.
-- The check only accepts raw x2/x3/x4 DWORD loads. Shaders that select a buffer
-  descriptor by another path still abort.
-- The 2026-09-29 *"UFC 5 in-game"* rework (`0791f92`) changed this file heavily
-  but the check survives (upstream `main`, `ResourceTracking.cpp`), so newer
-  builds abort on the same shader at a different line number.
+```cpp
+if (value != nullptr && value->GetOpcode() == ValueOpcode::ReadConstBuffer) {
+        Fail(pc, fmt::format("{} dword {} is not a valid runtime value",
+                             ValueOpcodeName(expected), bad_dword));
+}
+```
 
-Related upstream reports: #260 (Saros, main menu), #824 (Killzone: Liberation,
-same error class).
+### Related upstream reports
 
-`kyty-bisect.ps1` exists to confirm the regression boundary across releases.
+- #260 (Saros, main menu) — same title; its attached 09-12 log is what produced
+  the table above
+- #824 (Killzone: Liberation) — same error family
+
+### Bisect
+
+`kyty-bisect.ps1` sweeps releases and reports per-build pass/fail. Note that no
+release currently passes, so use it to compare *how far* each build gets rather
+than to find a working one.
