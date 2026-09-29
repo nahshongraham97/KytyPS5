@@ -36,6 +36,10 @@
 .PARAMETER Redownload
     Re-extract a build even when its folder already exists.
 
+.PARAMETER StopOnSuccess
+    Stop at the first build that gets past the resource-tracking abort. Use this
+    to find the newest usable build without downloading the rest.
+
 .EXAMPLE
     .\kyty-bisect.ps1 -Game 'D:\Games\SAROS-PPSA07631' -Redownload
 #>
@@ -56,7 +60,8 @@ param(
 
     [string[]]$ExtraArgs = @(),
     [switch]$VulkanValidation,
-    [switch]$Redownload
+    [switch]$Redownload,
+    [switch]$StopOnSuccess
 )
 
 $ErrorActionPreference = 'Stop'
@@ -136,9 +141,14 @@ foreach ($current in $Tag) {
 
     $reason = if ($errorLine) { ($errorLine.Context.PostContext -join ' ').Trim() } else { '(no --- Error --- block)' }
 
+    $trackingFail = Select-String -Path $capture -Pattern 'shader resource tracking:' -SimpleMatch -ErrorAction SilentlyContinue |
+                     Select-Object -First 1
+    $passed = (-not $errorLine) -and (-not $trackingFail)
+
     $summary += [pscustomobject]@{
         Build     = $current
         ExitCode  = $exit
+        Passed    = $passed
         Result    = $reason
         Console   = $capture
         EmuLog    = if ($logFile) { $logFile.FullName } else { '' }
@@ -146,6 +156,16 @@ foreach ($current in $Tag) {
 
     if ($logFile) {
         Copy-Item -LiteralPath $logFile.FullName -Destination (Join-Path $logRoot "$current.emulator.log") -Force
+    }
+
+    if ($passed) {
+        Write-Host "  Passed: no resource-tracking abort" -ForegroundColor Green
+        if ($StopOnSuccess) {
+            Write-Host "  Stopping (-StopOnSuccess)" -ForegroundColor Green
+            break
+        }
+    } else {
+        Write-Host "  Aborted: $reason" -ForegroundColor Yellow
     }
 }
 
