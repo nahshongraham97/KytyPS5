@@ -722,12 +722,16 @@ private:
 		return true;
 	}
 
-	static bool ContainsControlDependentPhi(const Program& program, Value value,
-	                                        std::vector<const Inst*>& visited, uint32_t depth = 0) {
-		if (depth > 16u) {
+	// True when the value is computed dynamically (from guest memory, user data registers,
+	// SRT reads, lane reads, or shader base) rather than from compile-time constants. Such
+	// descriptors are selected by the GPU at draw/dispatch time and cannot be
+	// resolved statically, so they are planned as indirect buffers instead.
+	static bool IsDynamicMemoryOrigin(Value value, std::vector<const Inst*>& visited,
+	                                  uint32_t depth = 0) {
+		if (depth > 24u) {
 			return false;
 		}
-		value = value.Resolve();
+		value            = value.Resolve();
 		const auto* inst = value.TryInstruction();
 		if (inst == nullptr) {
 			return false;
@@ -736,31 +740,33 @@ private:
 			return false;
 		}
 		visited.push_back(inst);
-		if (inst->GetOpcode() == ValueOpcode::Phi) {
-			if (ResolveInvariantPhi(program, value).IsEmpty()) {
-				return true;
-			}
+		const auto op = inst->GetOpcode();
+		if (op == ValueOpcode::ReadConstBuffer || op == ValueOpcode::LoadAddressU32 ||
+		    BufferAccessOf(op) != BufferAccess::None ||
+		    AddressOpcodeInfoOf(op).access != AddressAccess::None ||
+		    op == ValueOpcode::GetUserData || op == ValueOpcode::ReadConst ||
+		    op == ValueOpcode::ReadFirstLane || op == ValueOpcode::GetShaderBase ||
+		    op == ValueOpcode::GetBuiltin || op == ValueOpcode::MeshDrawParameter ||
+		    op == ValueOpcode::TessellationBase || op == ValueOpcode::GetTessellationAttribute ||
+		    op == ValueOpcode::GetScalarRegister || op == ValueOpcode::GetVectorRegister) {
+			return true;
 		}
-		for (size_t i = 0; i < inst->NumArgs(); ++i) {
-			if (ContainsControlDependentPhi(program, inst->Arg(i), visited, depth + 1u)) {
+		for (size_t i = 0; i < inst->NumArgs(); i++) {
+			if (IsDynamicMemoryOrigin(inst->Arg(i), visited, depth + 1u)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	static bool ContainsControlDependentPhi(const Program& program, Value value) {
+	static bool IsDynamicDescriptor(const DescriptorSource& descriptor) {
 		std::vector<const Inst*> visited;
-		return ContainsControlDependentPhi(program, value, visited, 0);
-	}
-
-	static bool IsDynamicDescriptor(const Program& program, const DescriptorSource& descriptor,
-	                                uint32_t width) {
-		return std::all_of(descriptor.dwords.begin(), descriptor.dwords.begin() + width,
-		                   [&](Value word) {
-			                   return word.Resolve().GetType() == Type::U32 &&
-			                          !ContainsControlDependentPhi(program, word);
-		                   });
+		for (uint32_t i = 0; i < descriptor.dword_count; i++) {
+			if (IsDynamicMemoryOrigin(descriptor.dwords[i], visited)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	uint32_t InternSource(const DescriptorSource& descriptor) {
@@ -1533,13 +1539,15 @@ private:
 		MakeSource(*handle, width, sampler, sample_adjust, base_reg, descriptor, pc);
 		uint32_t bad_dword = 0;
 		if (!ValidateSource(descriptor, bad_dword)) {
-			if (expected == ValueOpcode::GetBufferResource &&
-			    IsDynamicDescriptor(m_program, descriptor, width)) {
+			if (expected == ValueOpcode::GetBufferResource && IsDynamicDescriptor(descriptor)) {
 				// A GPU-selected descriptor: let the caller plan it as an indirect buffer.
 				return false;
 			}
-			Fail(pc, fmt::format("{} dword {} is not a valid runtime value",
-			                     ValueOpcodeName(expected), bad_dword));
+			const auto  bad_val  = descriptor.dwords[bad_dword].Resolve();
+			const auto* bad_inst = bad_val.TryInstruction();
+			Fail(pc, fmt::format("{} dword {} (op={}) is not a valid runtime value",
+			                     ValueOpcodeName(expected), bad_dword,
+			                     bad_inst ? ValueOpcodeName(bad_inst->GetOpcode()) : "immediate"));
 		}
 		source = InternSource(descriptor);
 		return true;
