@@ -3188,6 +3188,29 @@ void TestGpuSelectedScalarBufferDescriptor() {
         "GPU-selected scalar buffer descriptor did not become an indirect buffer");
 }
 
+void TestGpuSelectedUserDataScalarBufferDescriptor() {
+  // A buffer descriptor whose dwords come from unmapped / dynamically provided
+  // SGPR user data cannot be resolved into a static SRT source, but has no control-dependent
+  // phis. It must be planned as an indirect buffer.
+  Fixture fixture;
+  fixture.program.user_data_count = 16;
+  const auto descriptor = fixture.Buffer(
+      {fixture.UserData(20), fixture.UserData(21), fixture.UserData(22),
+       fixture.UserData(23)},
+      0x84);
+  MemoryInfo memory;
+  memory.kind = ResourceKind::Buffer;
+  const auto flags = fixture.AddMemory(memory, 0x84);
+  fixture.Emit(ValueOpcode::LoadBufferU32,
+               {descriptor, Value(0u), Value(0u), Value(0u), Value(true)},
+               flags);
+  fixture.PlanAndTrack();
+  Check(fixture.program.memory_info[flags.index].kind ==
+            ResourceKind::IndirectBuffer &&
+            fixture.program.resource_tracking_complete,
+        "GPU-selected user-data buffer descriptor did not become an indirect buffer");
+}
+
 int main() {
   try {
     const auto Run = [](const char *name, auto test) {
@@ -3229,6 +3252,7 @@ int main() {
     Run("resource limit", TestResourceLimitIsTransactional);
     Run("malformed memory kinds", TestMalformedMemoryKindsRejected);
     Run("gpu-selected scalar buffer", TestGpuSelectedScalarBufferDescriptor);
+    Run("gpu-selected user data buffer", TestGpuSelectedUserDataScalarBufferDescriptor);
   } catch (const std::exception &exception) {
     std::cerr << "resource tracking test failed: " << exception.what() << '\n';
     return 1;

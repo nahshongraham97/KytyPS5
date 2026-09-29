@@ -722,40 +722,45 @@ private:
 		return true;
 	}
 
-	// True when the value is computed from guest memory (a descriptor read back
-	// through the SRT or a BDA load) rather than from compile-time constants. Such
-	// descriptors are selected by the GPU at draw/dispatch time and cannot be
-	// resolved statically, so they are planned as indirect buffers instead.
-	static bool IsDynamicMemoryOrigin(Value value, uint32_t depth = 0) {
-		if (depth > 8u) {
+	static bool ContainsControlDependentPhi(const Program& program, Value value,
+	                                        std::vector<const Inst*>& visited, uint32_t depth = 0) {
+		if (depth > 16u) {
 			return false;
 		}
-		value            = value.Resolve();
+		value = value.Resolve();
 		const auto* inst = value.TryInstruction();
 		if (inst == nullptr) {
 			return false;
 		}
-		const auto op = inst->GetOpcode();
-		if (op == ValueOpcode::ReadConstBuffer || op == ValueOpcode::LoadAddressU32 ||
-		    BufferAccessOf(op) != BufferAccess::None ||
-		    AddressOpcodeInfoOf(op).access != AddressAccess::None) {
-			return true;
+		if (std::ranges::find(visited, inst) != visited.end()) {
+			return false;
 		}
-		for (size_t i = 0; i < inst->NumArgs(); i++) {
-			if (IsDynamicMemoryOrigin(inst->Arg(i), depth + 1u)) {
+		visited.push_back(inst);
+		if (inst->GetOpcode() == ValueOpcode::Phi) {
+			if (ResolveInvariantPhi(program, value).IsEmpty()) {
+				return true;
+			}
+		}
+		for (size_t i = 0; i < inst->NumArgs(); ++i) {
+			if (ContainsControlDependentPhi(program, inst->Arg(i), visited, depth + 1u)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	static bool IsDynamicDescriptor(const DescriptorSource& descriptor) {
-		for (uint32_t i = 0; i < descriptor.dword_count; i++) {
-			if (IsDynamicMemoryOrigin(descriptor.dwords[i])) {
-				return true;
-			}
-		}
-		return false;
+	static bool ContainsControlDependentPhi(const Program& program, Value value) {
+		std::vector<const Inst*> visited;
+		return ContainsControlDependentPhi(program, value, visited, 0);
+	}
+
+	static bool IsDynamicDescriptor(const Program& program, const DescriptorSource& descriptor,
+	                                uint32_t width) {
+		return std::all_of(descriptor.dwords.begin(), descriptor.dwords.begin() + width,
+		                   [&](Value word) {
+			                   return word.Resolve().GetType() == Type::U32 &&
+			                          !ContainsControlDependentPhi(program, word);
+		                   });
 	}
 
 	uint32_t InternSource(const DescriptorSource& descriptor) {
@@ -1528,7 +1533,8 @@ private:
 		MakeSource(*handle, width, sampler, sample_adjust, base_reg, descriptor, pc);
 		uint32_t bad_dword = 0;
 		if (!ValidateSource(descriptor, bad_dword)) {
-			if (expected == ValueOpcode::GetBufferResource && IsDynamicDescriptor(descriptor)) {
+			if (expected == ValueOpcode::GetBufferResource &&
+			    IsDynamicDescriptor(m_program, descriptor, width)) {
 				// A GPU-selected descriptor: let the caller plan it as an indirect buffer.
 				return false;
 			}
