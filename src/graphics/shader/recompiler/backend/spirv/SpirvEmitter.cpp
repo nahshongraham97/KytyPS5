@@ -115,7 +115,8 @@ void ValidateNativeProgram(const IR::Program& program) {
 		return program.info.uses_dma && handle.NumArgs() == 4u && !handle.Uses().empty() &&
 		       std::ranges::all_of(handle.Uses(), [&](const IR::Use& use) {
 			       const auto access = IR::BufferAccessOf(use.user->GetOpcode());
-			       if (access != IR::BufferAccess::Read && access != IR::BufferAccess::Write) {
+			       if (access != IR::BufferAccess::Read && access != IR::BufferAccess::Write &&
+			           access != IR::BufferAccess::Atomic) {
 				       return false;
 			       }
 			       const auto index = use.user->Flags<IR::MemoryFlags>().index;
