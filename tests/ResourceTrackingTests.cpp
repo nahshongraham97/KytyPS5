@@ -3154,6 +3154,40 @@ void TestMalformedMemoryKindsRejected() {
 
 } // namespace
 
+
+void TestGpuSelectedScalarBufferDescriptor() {
+  // A buffer descriptor whose dwords are loaded from guest memory is selected by
+  // the GPU at dispatch time, so it cannot be baked into a descriptor source. The
+  // scalar (x1) raw load must plan an indirect buffer instead of aborting.
+  Fixture fixture;
+  const auto heap = fixture.Buffer(
+      {fixture.UserData(4), fixture.UserData(5), fixture.UserData(6),
+       fixture.UserData(7)},
+      0x80);
+  MemoryInfo heap_memory;
+  heap_memory.kind = ResourceKind::Buffer;
+  const auto heap_flags = fixture.AddMemory(heap_memory, 0x80);
+  std::array<Value, 4> words;
+  for (uint32_t dword = 0; dword < words.size(); dword++) {
+    words[dword] =
+        fixture.Emit(ValueOpcode::LoadBufferU32,
+                     {heap, Value(dword), Value(0u), Value(0u), Value(true)},
+                     heap_flags);
+  }
+  const auto descriptor = fixture.Buffer(words, 0x84);
+  MemoryInfo memory;
+  memory.kind = ResourceKind::Buffer;
+  const auto flags = fixture.AddMemory(memory, 0x84);
+  fixture.Emit(ValueOpcode::LoadBufferU32,
+               {descriptor, Value(0u), Value(0u), Value(0u), Value(true)},
+               flags);
+  fixture.PlanAndTrack();
+  Check(fixture.program.memory_info[flags.index].kind ==
+            ResourceKind::IndirectBuffer &&
+            fixture.program.resource_tracking_complete,
+        "GPU-selected scalar buffer descriptor did not become an indirect buffer");
+}
+
 int main() {
   try {
     const auto Run = [](const char *name, auto test) {
@@ -3194,6 +3228,7 @@ int main() {
     Run("graphics push constants", TestGraphicsPushConstantLayout);
     Run("resource limit", TestResourceLimitIsTransactional);
     Run("malformed memory kinds", TestMalformedMemoryKindsRejected);
+    Run("gpu-selected scalar buffer", TestGpuSelectedScalarBufferDescriptor);
   } catch (const std::exception &exception) {
     std::cerr << "resource tracking test failed: " << exception.what() << '\n';
     return 1;

@@ -722,6 +722,42 @@ private:
 		return true;
 	}
 
+	// True when the value is computed from guest memory (a descriptor read back
+	// through the SRT or a BDA load) rather than from compile-time constants. Such
+	// descriptors are selected by the GPU at draw/dispatch time and cannot be
+	// resolved statically, so they are planned as indirect buffers instead.
+	static bool IsDynamicMemoryOrigin(Value value, uint32_t depth = 0) {
+		if (depth > 8u) {
+			return false;
+		}
+		value            = value.Resolve();
+		const auto* inst = value.TryInstruction();
+		if (inst == nullptr) {
+			return false;
+		}
+		const auto op = inst->GetOpcode();
+		if (op == ValueOpcode::ReadConstBuffer || op == ValueOpcode::LoadAddressU32 ||
+		    BufferAccessOf(op) != BufferAccess::None ||
+		    AddressOpcodeInfoOf(op).access != AddressAccess::None) {
+			return true;
+		}
+		for (size_t i = 0; i < inst->NumArgs(); i++) {
+			if (IsDynamicMemoryOrigin(inst->Arg(i), depth + 1u)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	static bool IsDynamicDescriptor(const DescriptorSource& descriptor) {
+		for (uint32_t i = 0; i < descriptor.dword_count; i++) {
+			if (IsDynamicMemoryOrigin(descriptor.dwords[i])) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	uint32_t InternSource(const DescriptorSource& descriptor) {
 		for (uint32_t candidate = 0; candidate < m_sources.size(); candidate++) {
 			const auto& current = m_sources[candidate];
@@ -1492,9 +1528,8 @@ private:
 		MakeSource(*handle, width, sampler, sample_adjust, base_reg, descriptor, pc);
 		uint32_t bad_dword = 0;
 		if (!ValidateSource(descriptor, bad_dword)) {
-			if (expected == ValueOpcode::GetBufferResource &&
-			    std::all_of(descriptor.dwords.begin(), descriptor.dwords.begin() + width,
-			                [](Value word) { return word.Resolve().GetType() == Type::U32; })) {
+			if (expected == ValueOpcode::GetBufferResource && IsDynamicDescriptor(descriptor)) {
+				// A GPU-selected descriptor: let the caller plan it as an indirect buffer.
 				return false;
 			}
 			Fail(pc, fmt::format("{} dword {} is not a valid runtime value",
@@ -1677,7 +1712,7 @@ private:
 				if (memory.kind != ResourceKind::Buffer || !memory.SupportsIndirectBufferLoad(op)) {
 					Fail(flags.pc,
 					     "buffer descriptor is not a valid runtime value; GPU-selected access "
-					     "requires a raw DWORD x2/x3/x4 load");
+					     "requires a raw DWORD x1/x2/x3/x4 load");
 				}
 				m_program.memory_info[flags.index].kind = ResourceKind::IndirectBuffer;
 				m_info.uses_dma                         = true;
