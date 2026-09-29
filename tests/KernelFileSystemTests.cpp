@@ -377,6 +377,108 @@ void CheckUnicodePaths(const std::filesystem::path &root) {
   FileSystem::Umount("/app0");
 }
 
+void CheckHostFilenameEncoding() {
+  constexpr std::string_view SaveName =
+      "rg_ac_Arcade Spirits: The New Challengers_0.dat";
+  Check(FileSystem::EncodeHostFilename(SaveName) ==
+            "rg_ac_Arcade Spirits%3A The New Challengers_0.dat",
+        "encode ':' in a guest filename");
+  Check(FileSystem::EncodeHostFilename("<>:\"|?*\x01\x1f") ==
+            "%3C%3E%3A%22%7C%3F%2A%01%1F",
+        "encode every Windows-forbidden character");
+  Check(FileSystem::EncodeHostFilename("foo:bar") !=
+            FileSystem::EncodeHostFilename("foo_bar"),
+        "distinct guest names keep distinct host names");
+
+  for (const std::string_view name :
+       {std::string_view("dir/100%_done.dat"), std::string_view("%3A.dat"),
+        std::string_view("asset-\xc3\xa9.bin"), std::string_view("")}) {
+    Check(FileSystem::EncodeHostFilename(name) == name,
+          "valid host names keep their existing path");
+  }
+  for (const std::string_view name :
+       {SaveName, std::string_view("a:b/c?d*e"), std::string_view("50%:off"),
+        std::string_view("<\x01>")}) {
+    Check(FileSystem::DecodeHostFilename(
+              FileSystem::EncodeHostFilename(name)) == name,
+          "decode reverses encode");
+  }
+  for (const std::string_view name :
+       {std::string_view("100%25"), std::string_view("%41"),
+        std::string_view("%3a"), std::string_view("end%3"),
+        std::string_view("end%"), std::string_view("%00")}) {
+    Check(FileSystem::DecodeHostFilename(name) == name,
+          "decode leaves escapes of allowed characters untouched");
+  }
+}
+
+void CheckForbiddenGuestFilenames(const std::filesystem::path &root) {
+  constexpr char GuestPath[] =
+      "/savedata0/rg_ac_Arcade Spirits: The New Challengers_0.dat";
+  constexpr std::string_view GuestName =
+      "rg_ac_Arcade Spirits: The New Challengers_0.dat";
+  constexpr std::string_view Payload = "save-with-colon";
+
+  const auto directory = root / "forbidden-names";
+  Check(std::filesystem::create_directory(directory),
+        "create forbidden-name fixture directory");
+  FileSystem::Mount(directory, "/savedata0");
+
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+  const auto host_file =
+      directory / "rg_ac_Arcade Spirits%3A The New Challengers_0.dat";
+  Check(FileSystem::GetRealFilename(GuestPath) == host_file,
+        "resolve a forbidden guest name to its encoded host name");
+#endif
+
+  int fd = FileSystem::KernelOpen(GuestPath, 0x0201, 0666);
+  Check(fd >= 3, "create a save whose name contains ':'");
+  Check(FileSystem::KernelWrite(fd, Payload.data(), Payload.size()) ==
+            static_cast<int64_t>(Payload.size()),
+        "write a save whose name contains ':'");
+  Check(FileSystem::KernelClose(fd) == OK, "close the new save");
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+  Check(std::filesystem::is_regular_file(host_file),
+        "save is stored under its encoded host name");
+#endif
+
+  fd = FileSystem::KernelOpen(GuestPath, 0, 0);
+  Check(fd >= 3, "reopen the save after it was closed");
+  std::array<char, 64> data{};
+  Check(FileSystem::KernelRead(fd, data.data(), data.size()) ==
+                static_cast<int64_t>(Payload.size()) &&
+            std::string_view(data.data(), Payload.size()) == Payload,
+        "reopened save keeps its contents");
+  Check(FileSystem::KernelClose(fd) == OK, "close the reopened save");
+
+  FileSystem::FileStat stat{};
+  Check(FileSystem::KernelStat(GuestPath, &stat) == OK &&
+            stat.st_size == static_cast<int64_t>(Payload.size()),
+        "stat a save whose name contains ':'");
+
+  fd = FileSystem::KernelOpen("/savedata0/", 0, 0);
+  Check(fd >= 3, "open the save directory");
+  std::array<char, 512> entries{};
+  const int size =
+      FileSystem::KernelGetdents(fd, entries.data(), entries.size());
+  Check(size > 0 && size <= entries.size(), "enumerate the save directory");
+  bool found = false;
+  for (int offset = 0; offset < size;) {
+    uint16_t length = 0;
+    std::memcpy(&length, entries.data() + offset + 4, sizeof(length));
+    const auto name_length = static_cast<uint8_t>(entries[offset + 7]);
+    if (std::string_view(entries.data() + offset + 8, name_length) ==
+        GuestName) {
+      found = true;
+    }
+    offset += length;
+  }
+  Check(found, "directory listing returns the guest name with ':'");
+  Check(FileSystem::KernelClose(fd) == OK, "close the save directory");
+
+  FileSystem::Umount("/savedata0");
+}
+
 void CheckUnicodeLogPath(const std::filesystem::path &root) {
   Config::ConfigOptions options;
   options.printf_direction = Config::LogDirection::File;
@@ -831,6 +933,8 @@ int main(int, char**) {
   CheckUnmappedPaths(temporary.Path());
   CheckArchiveMount(temporary.Path());
   CheckUnicodePaths(temporary.Path());
+  CheckHostFilenameEncoding();
+  CheckForbiddenGuestFilenames(temporary.Path());
   CheckUnicodeLogPath(temporary.Path());
   CheckDirectoryStream(temporary.Path());
   CheckAprPaths(temporary.Path());

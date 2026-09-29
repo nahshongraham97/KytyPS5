@@ -8,6 +8,8 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <string>
+#include <string_view>
 
 namespace Libs::LibKernel::FileSystem {
 
@@ -56,6 +58,13 @@ void                  Mount(const std::filesystem::path& folder, const std::stri
 void                  Umount(const std::string& folder_or_point);
 // Returns an empty path when the guest path has no mounted filesystem.
 std::filesystem::path GetRealFilename(const std::string& mounted_file_name);
+
+// Guest names may contain characters that Windows rejects in filenames (for example ':').
+// Those characters are stored on the host as %XX. Other characters, including '%' and '/',
+// pass through unchanged, so names that are already valid keep their existing host path.
+std::string EncodeHostFilename(std::string_view guest_name);
+// Reverses EncodeHostFilename. Only %XX sequences that name a forbidden character are decoded.
+std::string DecodeHostFilename(std::string_view host_name);
 
 int KYTY_SYSV_ABI     KernelOpen(const char* path, int flags, uint16_t mode);
 int KYTY_SYSV_ABI     KernelClose(int d);
