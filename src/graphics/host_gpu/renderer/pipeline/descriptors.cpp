@@ -129,16 +129,19 @@ NativeStorageBuffer(RenderContext& context, const PreparedBindings::BufferSource
 	const auto aligned_offset = Common::AlignDown(offset, alignment);
 	const auto adjustment     = offset - aligned_offset;
 	const auto clamped_size   = std::min<uint64_t>(effective_size, max_range - adjustment);
-	if (adjustment % sizeof(uint32_t) != 0 || adjustment >= 256) {
-		printf("storage buffer offset adjustment: address=0x%llx, offset=%llu, aligned=%llu, align=%llu, adj=%llu, size=%llu, max_range=%u\n",
-		       static_cast<unsigned long long>(address),
-		       static_cast<unsigned long long>(offset),
-		       static_cast<unsigned long long>(aligned_offset),
-		       static_cast<unsigned long long>(alignment),
-		       static_cast<unsigned long long>(adjustment),
-		       static_cast<unsigned long long>(size),
-		       max_range);
-		EXIT("storage buffer offset adjustment is unsupported\n");
+	if (adjustment >= 256) {
+		EXIT("storage buffer offset adjustment exceeds maximum byte offset: offset=%llu, aligned=%llu, adj=%llu\n",
+		     static_cast<unsigned long long>(offset),
+		     static_cast<unsigned long long>(aligned_offset),
+		     static_cast<unsigned long long>(adjustment));
+	}
+	if (adjustment % sizeof(uint32_t) != 0) {
+		LOGF("storage buffer offset adjustment is unaligned: address=0x%llx, offset=%llu, aligned=%llu, adj=%llu, size=%llu\n",
+		     static_cast<unsigned long long>(address),
+		     static_cast<unsigned long long>(offset),
+		     static_cast<unsigned long long>(aligned_offset),
+		     static_cast<unsigned long long>(adjustment),
+		     static_cast<unsigned long long>(size));
 	}
 	buffer_offset = static_cast<uint32_t>(adjustment);
 	const vk::DescriptorBufferInfo result {buffer->Handle(), aligned_offset, clamped_size + adjustment};
