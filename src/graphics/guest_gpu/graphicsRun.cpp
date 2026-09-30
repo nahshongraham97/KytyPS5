@@ -1092,7 +1092,15 @@ void CommandProcessor::DispatchDirect(uint32_t thread_group_x, uint32_t thread_g
 void CommandProcessor::DispatchIndirect(uint64_t args_addr, uint32_t mode) {
 	EXIT_NOT_IMPLEMENTED(args_addr == 0 || (args_addr & 3u) != 0);
 	if ((mode & Pm4::COMPUTE_DISPATCH_INITIATOR_USE_THREAD_DIMENSIONS) != 0) {
+		BufferFlushAndWait();
+		m_renderer.GetBufferCache().ReadMemory(args_addr, sizeof(vk::DispatchIndirectCommand), false);
 		const auto* args = reinterpret_cast<const vk::DispatchIndirectCommand*>(args_addr);
+		static std::atomic<uint32_t> indirect_log_count {0};
+		if (indirect_log_count.fetch_add(1, std::memory_order_relaxed) < 64) {
+			LOGF("CommandProcessor::DispatchIndirect: args_addr=0x%016" PRIx64
+			     " threads=(%" PRIu32 ", %" PRIu32 ", %" PRIu32 ") mode=0x%08" PRIx32 "\n",
+			     args_addr, args->x, args->y, args->z, mode);
+		}
 		DispatchDirect(args->x, args->y, args->z, mode);
 		return;
 	}

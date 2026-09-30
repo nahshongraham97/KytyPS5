@@ -686,10 +686,7 @@ public:
 	KYTY_CLASS_NO_COPY(PhysicalMemory);
 
 	static constexpr uint64_t TotalSize() { return static_cast<uint64_t>(13824) * 1024 * 1024; }
-	static uint64_t           Size() {
-		EXIT_IF(g_flexible_memory_size >= TotalSize());
-		return TotalSize() - g_flexible_memory_size;
-	}
+	static uint64_t           Size();
 
 	bool Alloc(uint64_t search_start, uint64_t search_end, size_t len, size_t alignment,
 	           uint64_t* phys_addr_out, int memory_type,
@@ -824,6 +821,13 @@ static std::unique_ptr<FlexibleMemory>    g_flexible_memory;
 static std::unique_ptr<PooledMemory>      g_pooled_memory;
 static std::unique_ptr<VirtualRanges>     g_virtual_ranges;
 static std::unique_ptr<GuestAddressSpace> g_guest_address_space;
+
+uint64_t PhysicalMemory::Size() {
+	const uint64_t total =
+	    g_guest_address_space != nullptr ? g_guest_address_space->GetBackingSize() : TotalSize();
+	EXIT_IF(g_flexible_memory_size >= total);
+	return total - g_flexible_memory_size;
+}
 static callback_func_t                    g_alloc_callback        = nullptr;
 static callback_func_t                    g_free_callback         = nullptr;
 static std::atomic<uint64_t>              g_memory_pool_committed = 0;
