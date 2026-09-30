@@ -25,11 +25,11 @@
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
 
-struct InputBinding : IR::StageInput {
+struct InputBinding: IR::StageInput {
 	uint32_t variable_id = 0;
 };
 
-struct OutputBinding : IR::StageOutput {
+struct OutputBinding: IR::StageOutput {
 	uint32_t variable_id        = 0;
 	uint32_t mesh_data_variable = 0;
 };
@@ -85,17 +85,17 @@ struct EmitterState {
 	      program(program_), input_info(input_info_),
 	      requirements(AnalyzeProgramRequirements(program_)) {}
 
-	Builder                                          builder;
-	const IR::Program&                               program;
-	ShaderStageInputInfo                             input_info;
-	std::array<uint32_t, 6>                          tess_variables {};
-	uint32_t                                         tess_inner_variable = 0;
-	uint32_t                                         tess_patch_base     = 0;
+	Builder                 builder;
+	const IR::Program&      program;
+	ShaderStageInputInfo    input_info;
+	std::array<uint32_t, 6> tess_variables {};
+	uint32_t                tess_inner_variable = 0;
+	uint32_t                tess_patch_base     = 0;
 
 	const SpirvRequirements                          requirements;
-	uint32_t                                         lane_count              = 1;
-	uint32_t                                         lane_half               = 0;
-	uint32_t                                         storage_buffer_variable = 0;
+	uint32_t                                         lane_count                  = 1;
+	uint32_t                                         lane_half                   = 0;
+	uint32_t                                         storage_buffer_variable     = 0;
 	uint32_t                                         storage_buffer_u64_variable = 0;
 	std::array<uint32_t, IR::ShaderInfo::MaxBuffers> memory_byte_offsets {};
 	std::array<uint32_t, IR::ShaderInfo::MaxBuffers> memory_dword_lengths {};
@@ -139,6 +139,7 @@ struct EmitterState {
 	const IR::Block*           current_block                         = nullptr;
 	uint32_t                   pixel_valid_mask_variable             = 0;
 	uint32_t                   subgroup_local_invocation_id_variable = 0;
+	uint32_t                   helper_invocation_variable            = 0;
 	uint32_t                   per_vertex_variable                   = 0;
 	uint32_t                   point_size_variable                   = 0;
 	uint32_t                   clip_distance_variable                = 0;
@@ -291,7 +292,6 @@ VertexInputScalarKind VertexParameterScalarKind(const EmitterState& state, uint3
 uint32_t VertexParameterComponentCount(const InputBinding& input);
 
 uint32_t VertexParameterScalarType(EmitterState& state, VertexInputScalarKind kind);
-
 
 uint32_t OutputVariableForExport(const EmitterState& state, const IR::ExportInfo& exp);
 
