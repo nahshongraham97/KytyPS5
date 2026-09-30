@@ -341,6 +341,16 @@ void PatchStructuredPhis(ValueEmitContext& ctx, StructuredFunctionState& structu
 // through its merge block after LoopWatchdogLimit of them.
 constexpr uint32_t LoopWatchdogLimit = 4096;
 
+static uint32_t GetLoopWatchdogLimit(ShaderType stage) {
+	if (const char* env = std::getenv("KYTY_LOOP_WATCHDOG_LIMIT"); env != nullptr) {
+		const auto val = std::strtoul(env, nullptr, 10);
+		if (val > 0) {
+			return static_cast<uint32_t>(val);
+		}
+	}
+	return stage == ShaderType::Compute ? 128u : LoopWatchdogLimit;
+}
+
 struct LoopWatchdog {
 	const IR::Block* header     = nullptr;
 	const IR::Block* cont       = nullptr;
@@ -378,8 +388,9 @@ void EmitWatchdogReport(ValueEmitContext& ctx, const LoopWatchdog& watchdog, uin
 		                          index);
 		state.builder.AddFunction(spv::OpStore, pointer, value);
 	};
+	const auto limit   = GetLoopWatchdogLimit(ctx.state.program.stage);
 	const auto tripped = Binary(state, spv::OpUGreaterThanEqual, TypeBool(state),
-	                            watchdog.counter, ConstantU32(state, LoopWatchdogLimit - 1u));
+	                            watchdog.counter, ConstantU32(state, limit - 1u));
 	EmitIfCondition(state, tripped, [&] {
 		const auto counter = state.builder.AllocateId();
 		state.builder.AddFunction(spv::OpAccessChain, TypeStorageBufferElementPointer(state),
@@ -551,9 +562,10 @@ void EmitStructuredFunction(ValueEmitContext& ctx) {
 		const auto& term  = info.terminator;
 		state.builder.AddFunction(spv::OpIAdd, TypeU32(state), latch->next, latch->counter,
 		                          ConstantU32(state, 1u));
+		const auto watchdog_limit = GetLoopWatchdogLimit(program.stage);
 		const auto under = state.builder.AllocateId();
 		state.builder.AddFunction(spv::OpULessThan, TypeBool(state), under, latch->next,
-		                          ConstantU32(state, LoopWatchdogLimit));
+		                          ConstantU32(state, watchdog_limit));
 		const auto* header = latch->header;
 		const auto* merge  = latch->merge;
 		if (term.kind == CFG::TerminatorKind::Branch) {

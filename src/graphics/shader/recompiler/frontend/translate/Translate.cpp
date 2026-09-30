@@ -1154,6 +1154,7 @@ IR::Program TranslateProgram(const Decoder::Program& decoded, const CFG::Graph& 
 			// (see MeshDispatchSlice) cover the same global primitive range as a
 			// single oversized draw, keeping fan centers, strip winding and index
 			// math consistent across slices.
+			const auto local = builtin(IR::StageInputKind::LocalInvocationIndex);
 			const auto primitive_chunk =
 			    entry_ir.IMul(entry_ir.IAdd(builtin(IR::StageInputKind::WorkgroupId, 0), draw(6)),
 			                  u32(mesh.primitives_per_group));
