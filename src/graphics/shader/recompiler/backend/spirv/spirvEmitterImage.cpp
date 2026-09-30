@@ -1120,7 +1120,6 @@ void EmitImage(ValueEmitContext& ctx, const IR::Inst& inst) {
 			                                     ConstantU32(state, spv::ScopeDevice),
 			                                     ConstantU32(state, spv::MemorySemanticsMaskNone),
 			                                     ctx.Arg(inst, 2));
-			           EmitDeviceAtomicMemoryBarrier(state);
 			           return old;
 		           }));
 		return;

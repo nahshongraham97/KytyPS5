@@ -315,9 +315,12 @@ uint32_t NormalizeFormatComponent(EmitterState& state, const Format::BufferForma
 }
 
 void EmitDeviceAtomicMemoryBarrier(EmitterState& state) {
+	if (state.program.stage == ShaderType::Pixel || state.program.stage == ShaderType::Vertex) {
+		return;
+	}
 	const auto semantics =
 	    spv::MemorySemanticsAcquireReleaseMask | spv::MemorySemanticsUniformMemoryMask;
-	state.builder.AddFunction(spv::OpMemoryBarrier, ConstantU32(state, spv::ScopeDevice),
+	state.builder.AddFunction(spv::OpMemoryBarrier, ConstantU32(state, spv::ScopeWorkgroup),
 	                          ConstantU32(state, semantics));
 }
 

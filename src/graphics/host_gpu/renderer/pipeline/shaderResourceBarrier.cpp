@@ -4,6 +4,7 @@
 #include "graphics/shader/shader.h"
 #include "graphics/shader/shaderBindings.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace Libs::Graphics {
@@ -106,6 +107,19 @@ bool HasShaderBufferWrites(const ShaderStageRuntime& runtime) {
 		has_writes |= descriptor.Base48() != 0 && descriptor.NumRecords() != 0;
 	}
 	return has_writes;
+}
+
+bool HasShaderStorageWrites(const ShaderStageRuntime& runtime) {
+	if (!runtime) {
+		return false;
+	}
+	if (HasShaderBufferWrites(runtime)) {
+		return true;
+	}
+	const auto& program = *runtime.program;
+	return std::any_of(program.info.images.begin(), program.info.images.end(), [](const auto& image) {
+		return image.written && image.resource_class == ShaderRecompiler::IR::ImageResourceClass::Storage;
+	});
 }
 
 void ShaderAccessBarrier(vk::CommandBuffer vk_buffer, vk::PipelineStageFlags source_stages) {

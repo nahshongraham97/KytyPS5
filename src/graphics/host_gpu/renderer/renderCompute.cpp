@@ -544,15 +544,7 @@ void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,
 		PreparedBindings* descriptor_stage = &bindings;
 		CommitBindings(buffer, vk::PipelineBindPoint::eCompute, pipeline,
 		               std::span {&descriptor_stage, 1u});
-		bool has_storage_writes = HasShaderBufferWrites(input_info.stage);
-		has_storage_writes =
-		    std::any_of(program.info.images.begin(), program.info.images.end(),
-		                [](const auto& image) {
-			                return image.written &&
-			                       image.resource_class ==
-			                           ShaderRecompiler::IR::ImageResourceClass::Storage;
-		                }) ||
-		    has_storage_writes;
+		const bool has_storage_writes = HasShaderStorageWrites(input_info.stage);
 		if (has_storage_writes) {
 			// A host fence used to serialize every dispatch. Preserve its read-before-write
 			// ordering while allowing the queue to execute asynchronously.
@@ -636,13 +628,7 @@ void RenderExecutor::DispatchIndirect(uint64_t submit_id, CommandBuffer& buffer,
 		CommitBindings(buffer, vk::PipelineBindPoint::eCompute, pipeline,
 		               std::span {&descriptor_stage, 1u});
 		const auto vk_buffer = buffer.Handle();
-		const bool has_storage_writes =
-		    HasShaderBufferWrites(input_info.stage) ||
-		    std::any_of(
-		        program.info.images.begin(), program.info.images.end(), [](const auto& image) {
-			        return image.written && image.resource_class ==
-			                                    ShaderRecompiler::IR::ImageResourceClass::Storage;
-		        });
+		const bool has_storage_writes = HasShaderStorageWrites(input_info.stage);
 		if (has_storage_writes) {
 			ShaderWriteHazardBarrier(vk_buffer, vk::PipelineStageFlagBits::eComputeShader);
 		}

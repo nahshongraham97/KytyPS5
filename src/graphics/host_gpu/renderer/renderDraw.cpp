@@ -1252,11 +1252,11 @@ void RenderExecutor::ExecutePreparedDrawResolved(uint64_t submit_id, CommandBuff
 	}
 	vk::PipelineStageFlags shader_write_stages = {};
 	for (const auto& stage: vertex_stages) {
-		if (HasShaderBufferWrites(stage.stage)) {
+		if (HasShaderStorageWrites(stage.stage)) {
 			shader_write_stages |= ShaderPipelineStages(NativeShaderStage(stage.logical_stage));
 		}
 	}
-	if (state.ps_active && HasShaderBufferWrites(state.ps_input_info.stage)) {
+	if (state.ps_active && HasShaderStorageWrites(state.ps_input_info.stage)) {
 		shader_write_stages |= vk::PipelineStageFlagBits::eFragmentShader;
 	}
 	if (shader_write_stages) {

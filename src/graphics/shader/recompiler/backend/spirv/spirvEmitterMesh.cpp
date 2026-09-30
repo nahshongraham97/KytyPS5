@@ -321,6 +321,7 @@ void EmitMeshEntryPoint(EmitterState& state) {
 				    ConstantU32(state, 0));
 			}
 		});
+		EmitBarrier(state);
 	}
 	if (state.mesh_segment_funcs.empty()) {
 		state.builder.AddFunction(spv::OpFunctionCall, TypeVoid(state), state.builder.AllocateId(),

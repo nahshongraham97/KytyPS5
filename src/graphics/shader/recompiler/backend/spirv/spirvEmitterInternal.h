@@ -634,8 +634,11 @@ uint32_t AtomicUpdate(EmitterState& state, uint32_t pointer, IR::ResourceKind ki
 	EmitLabel(state, cont);
 	state.builder.AddFunction(spv::OpBranch, header);
 	EmitLabel(state, merge);
-	state.builder.AddFunction(spv::OpMemoryBarrier, ConstantU32(state, scope),
-	                          ConstantU32(state, spv::MemorySemanticsAcquireReleaseMask | memory));
+	if (kind == IR::ResourceKind::Lds ||
+	    (state.program.stage != ShaderType::Pixel && state.program.stage != ShaderType::Vertex)) {
+		state.builder.AddFunction(spv::OpMemoryBarrier, ConstantU32(state, spv::ScopeWorkgroup),
+		                          ConstantU32(state, spv::MemorySemanticsAcquireReleaseMask | memory));
+	}
 	return observed;
 }
 
