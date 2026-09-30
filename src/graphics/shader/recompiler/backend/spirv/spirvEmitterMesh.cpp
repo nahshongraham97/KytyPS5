@@ -184,14 +184,24 @@ void DefineMeshOutputs(EmitterState& state) {
 			                                      state.lane_count * state.mesh_passes);
 			continue;
 		}
-		output.variable_id = MeshArray(
-		    state, spv::StorageClassOutput, type,
-		    output.kind == IR::StageOutputKind::Layer ? mesh.max_primitives : mesh.max_vertices);
 		// Only Layer is read by another invocation, through the primitive's provoking vertex.
 		const bool shared = output.kind == IR::StageOutputKind::Layer;
 		output.mesh_data_variable =
 		    MeshArray(state, shared ? spv::StorageClassWorkgroup : spv::StorageClassPrivate, type,
 		              shared ? mesh.max_vertices : state.lane_count * state.mesh_passes);
+
+		// AMD Vulkan drivers (amdvlk / proprietary ICD) encounter a compiler crash (null dereference
+		// in _SC_SI_PS_ATTR_CH_ENTRY) when a mesh shader declares a PerPrimitiveEXT BuiltIn Layer output.
+		// Since Kyty targets 2D/non-layered rendering (single view / viewMask 0), omit the Vulkan Layer
+		// output interface variable while preserving internal guest staging in mesh_data_variable.
+		if (output.kind == IR::StageOutputKind::Layer) {
+			output.variable_id = 0;
+			continue;
+		}
+
+		output.variable_id = MeshArray(
+		    state, spv::StorageClassOutput, type,
+		    mesh.max_vertices);
 		state.interface_variables.push_back(output.variable_id);
 		state.builder.AddName(output.variable_id, output.debug_name.c_str());
 		if (output.kind == IR::StageOutputKind::Parameter) {
@@ -199,13 +209,7 @@ void DefineMeshOutputs(EmitterState& state) {
 			                            spv::DecorationLocation, output.location);
 		} else {
 			state.builder.AddAnnotation(spv::OpDecorate, output.variable_id, spv::DecorationBuiltIn,
-			                            output.kind == IR::StageOutputKind::Layer
-			                                ? spv::BuiltInLayer
-			                                : spv::BuiltInPosition);
-		}
-		if (output.kind == IR::StageOutputKind::Layer) {
-			state.builder.AddAnnotation(spv::OpDecorate, output.variable_id,
-			                            spv::DecorationPerPrimitiveEXT); // PerPrimitiveEXT
+			                            spv::BuiltInPosition);
 		}
 	}
 	state.mesh_allocation = MeshArray(state, spv::StorageClassWorkgroup, TypeU32(state), 2);
@@ -422,7 +426,7 @@ void EmitMeshEntryPoint(EmitterState& state) {
 			                                      TypeBool(state), index),
 			                          culled);
 			for (const auto& output: state.outputs) {
-				if (output.kind != IR::StageOutputKind::Layer) {
+				if (output.kind != IR::StageOutputKind::Layer || output.variable_id == 0) {
 					continue;
 				}
 				const auto layer = MeshLoad(state, output.mesh_data_variable,
