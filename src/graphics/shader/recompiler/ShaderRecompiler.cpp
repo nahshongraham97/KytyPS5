@@ -814,7 +814,8 @@ TranslateResult TranslateProgram(std::span<const uint32_t> code, const CompileOp
 
 	LOGF("%s phase begin: stage=%s hash=0x%016" PRIx64 " CFG BuildGraph\n", GetDumpLabel(options),
 	     StageName(options.stage), options.shader_hash);
-	auto native_cfg = CFG::BuildGraph(decoded);
+	auto native_cfg = CFG::BuildGraph(
+	    decoded, fmt::format("{} hash=0x{:016x}", StageName(options.stage), options.shader_hash));
 	CFG::Graph structured_cfg;
 	auto* selected_cfg = &native_cfg;
 	if (options.non_fatal && native_cfg.unsupported && !native_cfg.irreducible) {

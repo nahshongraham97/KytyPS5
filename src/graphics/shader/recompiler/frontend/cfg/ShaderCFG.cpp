@@ -1501,11 +1501,14 @@ private:
 
 } // namespace
 
-Graph BuildGraph(const Decoder::Program& program) {
+Graph BuildGraph(const Decoder::Program& program, std::string_view context) {
 	Graph graph;
+	const std::string prefix = context.empty() ? "" : fmt::format("{}: ", context);
+	auto fail = [&graph, &prefix](FailureKind kind, uint32_t block_id, std::string message) {
+		ExitBuildFailure(graph, kind, block_id, prefix + message);
+	};
 	if (program.instructions.empty()) {
-		ExitBuildFailure(graph, FailureKind::InvalidLabel, UINT32_MAX,
-		                 "cannot build CFG for empty shader");
+		fail(FailureKind::InvalidLabel, UINT32_MAX, "cannot build CFG for empty shader");
 		return graph;
 	}
 
@@ -1516,10 +1519,9 @@ Graph BuildGraph(const Decoder::Program& program) {
 	for (const auto& inst: program.instructions) {
 		instruction_pcs.insert(inst.pc);
 		if (inst.opcode == Opcode::UNSUPPORTED) {
-			ExitBuildFailure(
-			    graph, FailureKind::UnsupportedInstruction, UINT32_MAX,
-			    fmt::format("unsupported decoded instruction in CFG at pc 0x{:08x}: {}", inst.pc,
-			                Decoder::InstructionToString(inst).c_str()));
+			fail(FailureKind::UnsupportedInstruction, UINT32_MAX,
+			     fmt::format("unsupported decoded instruction in CFG at pc 0x{:08x}: {}", inst.pc,
+			                 Decoder::InstructionToString(inst).c_str()));
 			return graph;
 		}
 	}
@@ -1534,9 +1536,9 @@ Graph BuildGraph(const Decoder::Program& program) {
 		const auto  next_pc = InstructionEndPc(inst);
 		if (Decoder::IsDirectBranch(inst.opcode)) {
 			if (!IsValidTarget(inst.branch_target, instruction_pcs, first_pc, end_pc)) {
-				ExitBuildFailure(graph, FailureKind::InvalidBranchTarget, UINT32_MAX,
-				                 fmt::format("branch at pc 0x{:08x} targets invalid pc 0x{:08x}",
-				                             inst.pc, inst.branch_target));
+				fail(FailureKind::InvalidBranchTarget, UINT32_MAX,
+				     fmt::format("branch at pc 0x{:08x} targets invalid pc 0x{:08x}",
+				                 inst.pc, inst.branch_target));
 				return graph;
 			}
 			labels.insert(inst.branch_target);
@@ -1546,9 +1548,8 @@ Graph BuildGraph(const Decoder::Program& program) {
 		} else if (inst.opcode == Opcode::S_SETPC_B64) {
 			SetpcTargetInfo target_info;
 			if (!ResolveSetpcTargets(program, i, target_info)) {
-				ExitBuildFailure(
-				    graph, FailureKind::InvalidBranchTarget, UINT32_MAX,
-				    fmt::format("unsupported dynamic S_SETPC_B64 at pc 0x{:08x}", inst.pc));
+				fail(FailureKind::InvalidBranchTarget, UINT32_MAX,
+				     fmt::format("unsupported dynamic S_SETPC_B64 at pc 0x{:08x}", inst.pc));
 				return graph;
 			}
 			const auto target_pcs = target_info.indirect
@@ -1556,10 +1557,9 @@ Graph BuildGraph(const Decoder::Program& program) {
 			                            : std::span<const uint32_t>(&target_info.target, 1);
 			for (const auto target: target_pcs) {
 				if (!IsValidTarget(target, instruction_pcs, first_pc, end_pc)) {
-					ExitBuildFailure(
-					    graph, FailureKind::InvalidBranchTarget, UINT32_MAX,
-					    fmt::format("S_SETPC_B64 at pc 0x{:08x} targets invalid pc 0x{:08x}",
-					                inst.pc, target));
+					fail(FailureKind::InvalidBranchTarget, UINT32_MAX,
+					     fmt::format("S_SETPC_B64 at pc 0x{:08x} targets invalid pc 0x{:08x}",
+					                 inst.pc, target));
 					return graph;
 				}
 				labels.insert(target);
@@ -1580,9 +1580,8 @@ Graph BuildGraph(const Decoder::Program& program) {
 			continue;
 		}
 		if (start != end_pc && !instruction_pcs.contains(start)) {
-			ExitBuildFailure(
-			    graph, FailureKind::InvalidLabel, UINT32_MAX,
-			    fmt::format("CFG label does not start on an instruction: 0x{:08x}", start));
+			fail(FailureKind::InvalidLabel, UINT32_MAX,
+			     fmt::format("CFG label does not start on an instruction: 0x{:08x}", start));
 			return graph;
 		}
 
@@ -1653,10 +1652,9 @@ Graph BuildGraph(const Decoder::Program& program) {
 			block.terminator.true_block = pc_to_block.at(last.branch_target);
 			const auto fallthrough      = pc_to_block.find(next_pc);
 			if (fallthrough == pc_to_block.end()) {
-				ExitBuildFailure(
-				    graph, FailureKind::MissingFallthrough, block.id,
-				    fmt::format("conditional branch at pc 0x{:08x} has no fallthrough block",
-				                last.pc));
+				fail(FailureKind::MissingFallthrough, block.id,
+				     fmt::format("conditional branch at pc 0x{:08x} has no fallthrough block",
+				                 last.pc));
 				return graph;
 			}
 			block.terminator.false_block = fallthrough->second;
