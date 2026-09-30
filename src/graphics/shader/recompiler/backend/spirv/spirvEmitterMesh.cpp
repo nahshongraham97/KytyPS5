@@ -386,16 +386,21 @@ void EmitMeshEntryPoint(EmitterState& state) {
 		EmitIfCondition(state, is_primitive, [&] {
 			const auto packed = MeshLoad(state, state.mesh_primitive_data, spv::StorageClassPrivate,
 			                             TypeU32(state), ConstantU32(state, slot));
-			uint32_t   vertex[3] {};
+			uint32_t vertex[3] {};
+			uint32_t safe_vertex[3] {};
 			for (uint32_t component = 0; component < 3; component++) {
 				vertex[component] = state.builder.AllocateId();
 				state.builder.AddFunction(
 				    spv::OpBitFieldUExtract, TypeU32(state), vertex[component], packed,
 				    ConstantU32(state, component * 10u), ConstantU32(state, 10));
+				const auto in_range =
+				    Binary(state, spv::OpULessThan, TypeBool(state), vertex[component], vertices);
+				safe_vertex[component] =
+				    Select(state, TypeU32(state), in_range, vertex[component], ConstantU32(state, 0));
 			}
 			const auto triangle = state.builder.AllocateId();
 			state.builder.AddFunction(spv::OpCompositeConstruct, TypeU32Vector(state, 3), triangle,
-			                          vertex[0], vertex[1], vertex[2]);
+			                          safe_vertex[0], safe_vertex[1], safe_vertex[2]);
 			const auto triangle_pointer =
 			    MeshElement(state, state.mesh_primitives, spv::StorageClassOutput,
 			                TypeU32Vector(state, 3), index);
@@ -421,7 +426,7 @@ void EmitMeshEntryPoint(EmitterState& state) {
 				}
 				const auto layer = MeshLoad(state, output.mesh_data_variable,
 				                            spv::StorageClassWorkgroup, TypeU32(state),
-				                            vertex[state.input_info.vertex->mesh.provoking_vertex]);
+				                            safe_vertex[state.input_info.vertex->mesh.provoking_vertex]);
 				const auto pointer = MeshElement(state, output.variable_id, spv::StorageClassOutput,
 				                                 TypeU32(state), index);
 				state.builder.AddFunction(spv::OpStore, pointer, layer);

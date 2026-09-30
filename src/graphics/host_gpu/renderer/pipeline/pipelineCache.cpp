@@ -940,8 +940,7 @@ PipelineCache::Pipeline& PipelineCache::GetGraphicsPipeline(
 
 	EXIT_IF(colors.size() > RENDER_COLOR_ATTACHMENTS_MAX);
 	EXIT_IF(!vertex_program);
-	const bool ps_active = ps_input_info != nullptr;
-	EXIT_IF(ps_active && !pixel_program);
+	const bool ps_active = ps_input_info != nullptr && pixel_program;
 	const auto color_count = static_cast<uint32_t>(colors.size());
 
 	auto&             ctx = command.GetRegisters();

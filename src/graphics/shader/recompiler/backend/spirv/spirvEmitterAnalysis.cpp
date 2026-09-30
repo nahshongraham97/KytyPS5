@@ -228,6 +228,15 @@ uint32_t StorageImageDescriptorPointer(EmitterState& state, uint32_t resource) {
 	                                "storage image descriptor array was not emitted");
 }
 
+uint32_t LoadStorageImageDescriptor(EmitterState& state, uint32_t resource) {
+	const auto& image      = state.program.info.images.at(resource);
+	const auto  image_type = ImageType(state, image);
+	const auto  pointer    = StorageImageDescriptorPointer(state, resource);
+	const auto  descriptor = state.builder.AllocateId();
+	state.builder.AddFunction(spv::OpLoad, image_type, descriptor, pointer);
+	return descriptor;
+}
+
 void EmitStorageImageWrite(EmitterState& state, uint32_t resource, uint32_t mip_lod, uint32_t coord,
                            uint32_t texel) {
 	const auto& image = state.program.info.images.at(resource);

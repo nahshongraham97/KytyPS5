@@ -1073,13 +1073,38 @@ void EmitImage(ValueEmitContext& ctx, const IR::Inst& inst) {
 	const auto atomic_opcode = ImageAtomicOpcode(op);
 	if (image_info.access == IR::ImageAccess::Atomic) {
 		const auto dimension = image.dimension;
-		ctx.Define(inst, EmitValueOrZeroIfCondition(state, ctx.Arg(inst, 3), [&]() {
+		state.builder.RequireCapability(spv::CapabilityImageQuery);
+		const auto descriptor    = LoadStorageImageDescriptor(state, mem.resource);
+		const auto size_type     = ImageViewSizeType(state, dimension);
+		const auto size          = state.builder.AllocateId();
+		state.builder.AddFunction(spv::OpImageQuerySize, size_type, size, descriptor);
+		const auto coord          = CoordU32(ctx, mem, *address, dimension);
+		const auto num_components = ImageDimensionInfoFor(dimension).coordinate_components;
+		uint32_t   in_bounds      = 0;
+		if (num_components == 1u) {
+			in_bounds = Binary(state, spv::OpULessThan, TypeBool(state), coord, size);
+		} else {
+			for (uint32_t c = 0; c < num_components; ++c) {
+				const auto coord_c = state.builder.AllocateId();
+				state.builder.AddFunction(spv::OpCompositeExtract, TypeU32(state), coord_c, coord, c);
+				const auto size_c = state.builder.AllocateId();
+				state.builder.AddFunction(spv::OpCompositeExtract, TypeU32(state), size_c, size, c);
+				const auto comp_in_bounds =
+				    Binary(state, spv::OpULessThan, TypeBool(state), coord_c, size_c);
+				in_bounds = (in_bounds == 0)
+				                ? comp_in_bounds
+				                : Binary(state, spv::OpLogicalAnd, TypeBool(state), in_bounds, comp_in_bounds);
+			}
+		}
+		const auto active =
+		    Binary(state, spv::OpLogicalAnd, TypeBool(state), ctx.Arg(inst, 3), in_bounds);
+		ctx.Define(inst, EmitValueOrZeroIfCondition(state, active, [&]() {
 			           const auto pointer      = state.builder.AllocateId();
 			           const auto pointer_type = state.builder.Type(
 			               spv::OpTypePointer, spv::StorageClassImage, TypeU32(state));
 			           state.builder.AddFunction(spv::OpImageTexelPointer, pointer_type, pointer,
 			                                     StorageImageDescriptorPointer(state, mem.resource),
-			                                     CoordU32(ctx, mem, *address, dimension),
+			                                     coord,
 			                                     ConstantU32(state, 0));
 			           if (op == IR::ValueOpcode::ImageAtomicFMin32 ||
 			               op == IR::ValueOpcode::ImageAtomicFMax32) {

@@ -328,6 +328,8 @@ uint32_t MakeSampledImage(EmitterState& state, uint32_t resource, uint32_t sampl
 
 uint32_t StorageImageDescriptorPointer(EmitterState& state, uint32_t resource);
 
+uint32_t LoadStorageImageDescriptor(EmitterState& state, uint32_t resource);
+
 void EmitStorageImageWrite(EmitterState& state, uint32_t resource, uint32_t mip_lod, uint32_t coord,
                            uint32_t texel);
 
