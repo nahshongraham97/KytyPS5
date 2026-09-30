@@ -867,7 +867,7 @@ uint64_t ApplyReciprocalSquareRootPatches(const PatchModule& module,
 		LOGF("VRSQRTPS patching: found=%zu, native=%" PRIu64 ", trapped=%" PRIu64 "\n", sites.size(),
 		     native, patched);
 	}
-	return patched +
+	return patched + native +
 	       X64InstructionEmulator::PatchReciprocalSquareRoots(trampoline_addr, trampoline_size);
 }
 
