@@ -327,13 +327,15 @@ void ValidateStorageTexture(const ShaderRecompiler::IR::ImageResource& resource,
 	const bool raw_atomic_storage = resource.atomic && uint_resource &&
 	                                (format == Prospero::BufferFormat::k32UInt ||
 	                                 format == Prospero::BufferFormat::k32SInt ||
-	                                 format == Prospero::BufferFormat::k32Float);
+	                                 format == Prospero::BufferFormat::k32Float ||
+	                                 format == Prospero::BufferFormat::k32_32UInt);
 	const bool format_ok =
 	    raw_sint_storage || raw_atomic_storage ||
 	    (numeric_class != Prospero::TextureNumericClass::Unsupported &&
 	     numeric_class != Prospero::TextureNumericClass::Sint &&
 	     uint_resource == (numeric_class == Prospero::TextureNumericClass::Uint) &&
-	     (!resource.atomic || format == Prospero::BufferFormat::k32UInt));
+	     (!resource.atomic || format == Prospero::BufferFormat::k32UInt ||
+	      format == Prospero::BufferFormat::k32_32UInt));
 	if (resource_ok && descriptor_ok && encoding_ok && format_ok && size != 0) {
 		return;
 	}
@@ -693,14 +695,19 @@ TextureBinding RenderExecutor::ResolveTexture(const ShaderRecompiler::IR::ImageR
 	const auto block_bytes         = Prospero::BlockCompressedBytesPerBlock(format);
 	TextureCache::ImageDesc desc {};
 	desc.info.data         = {address, size.size};
-	desc.info.pixel_format = pixel_format;
+	desc.info.pixel_format = (storage && resource.atomic &&
+	                          format == Prospero::BufferFormat::k32_32UInt)
+	                             ? view_format
+	                             : pixel_format;
 	desc.info.guest_format = format;
 	desc.info.type         = TextureBaseType(type);
 	desc.info.extent       = {width, height, volume ? depth : 1u};
 	desc.info.resources    = {levels, image_layers};
 	desc.info.pitch        = pitch;
 	desc.info.bytes_per_block =
-	    block_bytes != 0 ? block_bytes : Prospero::NumBytesPerElement(format);
+	    (storage && resource.atomic && format == Prospero::BufferFormat::k32_32UInt)
+	        ? 4u
+	        : (block_bytes != 0 ? block_bytes : Prospero::NumBytesPerElement(format));
 	desc.info.samples   = samples;
 	desc.info.tile_mode = tile;
 	if (!resource.r128 && descriptor.MetaCompress() && tile != Prospero::TileMode::kDepth &&

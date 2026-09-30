@@ -453,7 +453,7 @@ void EmitStructuredFunction(ValueEmitContext& ctx) {
 	StructuredFunctionState structured;
 	std::vector<LoopWatchdog>          watchdogs;
 	std::vector<WatchdogExtraIncoming> extra_incomings;
-	if (program.info.uses_dma) {
+	if (program.info.uses_dma || program.stage == ShaderType::Compute) {
 		for (size_t index = 0; index < program.blocks.size(); index++) {
 			const auto& term = program.block_info[index].terminator;
 			if (!term.loop_header) {

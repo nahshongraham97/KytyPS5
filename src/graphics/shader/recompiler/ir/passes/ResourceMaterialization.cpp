@@ -574,7 +574,8 @@ static bool BuildResourceSpecialization(const ResourcePlan& program, ResourceSna
 		const bool float_atomic =
 		    float_image_atomics && base.atomic && format == Prospero::BufferFormat::k32Float;
 		if (base.atomic && format != Prospero::BufferFormat::k32UInt &&
-		    format != Prospero::BufferFormat::k32SInt && !float_atomic) {
+		    format != Prospero::BufferFormat::k32SInt &&
+		    format != Prospero::BufferFormat::k32_32UInt && !float_atomic) {
 			return SpecializationFail(
 			    fmt::format("atomic image descriptor {} uses unsupported format {}", i,
 			                static_cast<uint32_t>(format)));
