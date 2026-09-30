@@ -16769,7 +16769,6 @@ private:
             "will be skipped\n");
       }
     }
-    }
 
     float priority = 1.0f;
     vk::DeviceQueueCreateInfo queue_info{};
