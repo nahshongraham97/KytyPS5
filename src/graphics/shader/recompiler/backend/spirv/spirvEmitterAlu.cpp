@@ -324,8 +324,10 @@ uint32_t EmitPackFloat2x16Rtz(EmitterState& state, uint32_t arg0, uint32_t arg1)
 }
 
 uint32_t EmitFPSaturate32(EmitterState& state, uint32_t arg0) {
-	return EmitExt(state, TypeF32(state), GLSLstd450FClamp,
-	               {arg0, ConstantF32(state, 0), ConstantF32(state, 0x3f800000u)});
+	const auto clamped = EmitExt(state, TypeF32(state), GLSLstd450FClamp,
+	                             {arg0, ConstantF32(state, 0), ConstantF32(state, 0x3f800000u)});
+	const auto is_nan   = EmitClassifyF32(state, arg0).nan;
+	return Select(state, TypeF32(state), is_nan, ConstantF32(state, 0), clamped);
 }
 
 uint32_t EmitSMulHi(EmitterState& state, uint32_t arg0, uint32_t arg1) {
