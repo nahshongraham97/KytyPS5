@@ -1907,6 +1907,7 @@ bool TextureCache::DownloadImageMemory(ImageId id) {
 	m_scheduler.EndRendering();
 	m_scheduler.Current().Handle().pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
 	                                               vk::PipelineStageFlagBits::eHost, {}, 0, nullptr,
+	                                               1, &barrier, 0, nullptr);
 	{
 		std::lock_guard lock {m_pending_download_mutex};
 		m_pending_downloads.push_back(range);
