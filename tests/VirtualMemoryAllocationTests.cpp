@@ -3013,7 +3013,17 @@ void TestPackedReciprocalSquareRoot() {
 #endif
 		const auto before = g_rsqrt_traps;
 		function(input.data(), output.data());
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+		const bool is_native = patched.reciprocal_sqrt_instruction_count > 0 &&
+		                       std::getenv("KYTY_RSQRT_TRAP") == nullptr;
+		if (is_native) {
+			Check(test, g_rsqrt_traps == before, "native trampoline unexpectedly trapped");
+		} else {
+			Check(test, g_rsqrt_traps == before + 1, "patched instruction did not execute its handler");
+		}
+#else
 		Check(test, g_rsqrt_traps == before + 1, "patched instruction did not execute its handler");
+#endif
 		Check(test, red_zone_intact(), "patched instruction corrupted the guest red zone");
 		Check(test, output[0] == expected, "patched instruction read or wrote the wrong register");
 		if (destination != source) {
