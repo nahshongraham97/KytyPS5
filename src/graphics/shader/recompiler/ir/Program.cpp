@@ -398,7 +398,8 @@ void ValidateProgram(const Program& program, bool require_ssa) {
 					                        ValueOpcodeName(inst.GetOpcode())));
 				}
 				const auto& memory = program.memory_info[memory_index];
-				if (memory.kind != ResourceKind::ScalarBuffer) {
+				if (memory.kind != ResourceKind::ScalarBuffer &&
+				    memory.kind != ResourceKind::IndirectBuffer) {
 					return Fail(fmt::format("{} has an invalid scalar-memory resource kind",
 					                        ValueOpcodeName(inst.GetOpcode())));
 				}
@@ -406,7 +407,8 @@ void ValidateProgram(const Program& program, bool require_ssa) {
 				    memory.component_count == 1u || memory.component_count == 2u ||
 				    memory.component_count == 4u || memory.component_count == 8u ||
 				    memory.component_count == 16u;
-				if (memory.data_bits != 32u || memory.data_dwords != 1u || !valid_group_width ||
+				if (memory.formatted || memory.typed || memory.data_bits != 32u ||
+				    memory.data_dwords != 1u || !valid_group_width ||
 				    memory.component_index >= memory.component_count) {
 					return Fail(fmt::format("{} has inconsistent scalar-memory metadata",
 					                        ValueOpcodeName(inst.GetOpcode())));
@@ -447,7 +449,7 @@ void ValidateProgram(const Program& program, bool require_ssa) {
 					return Fail(fmt::format("{} has an invalid memory-info index",
 					                        ValueOpcodeName(inst.GetOpcode())));
 				}
-				const auto& memory = program.memory_info[memory_index];
+				const auto& memory        = program.memory_info[memory_index];
 				const bool  vector_buffer = memory.kind == ResourceKind::Buffer ||
 				                            memory.kind == ResourceKind::IndirectBuffer;
 				if (!vector_buffer && memory.kind != ResourceKind::ScalarBuffer) {
