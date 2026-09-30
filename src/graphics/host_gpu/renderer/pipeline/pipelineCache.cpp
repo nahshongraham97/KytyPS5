@@ -170,6 +170,10 @@ bool ReadShaderGuestMemory(void*, uint64_t address, std::span<uint32_t> values) 
 	return true;
 }
 
+bool ValidateShaderGuestMemoryRange(void*, uint64_t address, uint64_t size) {
+	return Libs::LibKernel::Memory::TryClampRangeSize(address, size) != 0;
+}
+
 // --skip-shaders and KYTY_SKIP_SHADER_HASHES="hash,hash,...": skip the draws and dispatches of
 // these guest shaders, the same way a shader that fails to compile is skipped. To see what one
 // shader contributes, to step past one that loses the device, or to leave out work nothing can
@@ -422,6 +426,7 @@ struct PipelineCache::ProgramCache {
 		    .shader_base                = params.Base(),
 		    .read_memory                = ReadShaderGuestMemoryRaw,
 		    .read_specialization_memory = ReadShaderGuestMemory,
+		    .validate_memory_range      = ValidateShaderGuestMemoryRange,
 		    .float_image_atomics        = Config::FloatImageAtomicsEnabled(),
 		};
 		if (entry != programs.end()) {

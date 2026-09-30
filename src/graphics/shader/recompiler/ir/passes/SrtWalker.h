@@ -10,6 +10,7 @@ namespace Libs::Graphics::ShaderRecompiler::IR {
 class Value;
 
 using SrtMemoryReader = bool (*)(void* userdata, uint64_t address, std::span<uint32_t> values);
+using SrtMemoryRangeValidator = bool (*)(void* userdata, uint64_t address, uint64_t size);
 
 struct SrtRuntime {
 	std::span<const uint32_t> user_data;
@@ -17,6 +18,7 @@ struct SrtRuntime {
 	SrtMemoryReader           read_memory                = nullptr;
 	void*                     userdata                   = nullptr;
 	SrtMemoryReader           read_specialization_memory = nullptr;
+	SrtMemoryRangeValidator   validate_memory_range      = nullptr;
 	// Accept image atomics on k32Float descriptors: upstream's float atomics, and integer atomics
 	// run as uint atomics on the raw bits. On by default, as in the emulator; the emulator passes
 	// --no-float-image-atomics through here.
