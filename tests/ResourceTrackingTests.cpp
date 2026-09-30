@@ -3329,11 +3329,15 @@ void TestGpuSelectedScalarBufferDescriptor() {
   MemoryInfo heap_memory;
   heap_memory.kind = ResourceKind::Buffer;
   const auto heap_flags = fixture.AddMemory(heap_memory, 0x80);
+  const auto selector =
+      fixture.Emit(ValueOpcode::GetVectorRegister, {Value(static_cast<VectorReg>(0))});
   std::array<Value, 4> words;
   for (uint32_t dword = 0; dword < words.size(); dword++) {
+    const auto offset =
+        fixture.Emit(ValueOpcode::IAdd32, {Value(dword), selector});
     words[dword] =
         fixture.Emit(ValueOpcode::LoadBufferU32,
-                     {heap, Value(dword), Value(0u), Value(0u), Value(true)},
+                     {heap, offset, Value(0u), Value(0u), Value(true)},
                      heap_flags);
   }
   const auto descriptor = fixture.Buffer(words, 0x84);
@@ -3382,11 +3386,15 @@ void TestGpuSelectedScalarBufferDescriptorStore() {
   MemoryInfo heap_memory;
   heap_memory.kind = ResourceKind::Buffer;
   const auto heap_flags = fixture.AddMemory(heap_memory, 0x80);
+  const auto selector =
+      fixture.Emit(ValueOpcode::GetVectorRegister, {Value(static_cast<VectorReg>(0))});
   std::array<Value, 4> words;
   for (uint32_t dword = 0; dword < words.size(); dword++) {
+    const auto offset =
+        fixture.Emit(ValueOpcode::IAdd32, {Value(dword), selector});
     words[dword] =
         fixture.Emit(ValueOpcode::LoadBufferU32,
-                     {heap, Value(dword), Value(0u), Value(0u), Value(true)},
+                     {heap, offset, Value(0u), Value(0u), Value(true)},
                      heap_flags);
   }
   const auto descriptor = fixture.Buffer(words, 0x84);
@@ -3412,11 +3420,15 @@ void TestGpuSelectedScalarBufferDescriptorAtomic() {
   MemoryInfo heap_memory;
   heap_memory.kind = ResourceKind::Buffer;
   const auto heap_flags = fixture.AddMemory(heap_memory, 0x80);
+  const auto selector =
+      fixture.Emit(ValueOpcode::GetVectorRegister, {Value(static_cast<VectorReg>(0))});
   std::array<Value, 4> words;
   for (uint32_t dword = 0; dword < words.size(); dword++) {
+    const auto offset =
+        fixture.Emit(ValueOpcode::IAdd32, {Value(dword), selector});
     words[dword] =
         fixture.Emit(ValueOpcode::LoadBufferU32,
-                     {heap, Value(dword), Value(0u), Value(0u), Value(true)},
+                     {heap, offset, Value(0u), Value(0u), Value(true)},
                      heap_flags);
   }
   const auto descriptor = fixture.Buffer(words, 0x84);

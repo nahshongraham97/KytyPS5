@@ -2840,8 +2840,13 @@ private:
 				}
 				const bool scalar_read =
 				    memory.kind == ResourceKind::ScalarBuffer && op == ValueOpcode::ReadConstBuffer;
+				const bool vector_read =
+				    memory.kind == ResourceKind::Buffer &&
+				    (op == ValueOpcode::LoadBufferU32 || op == ValueOpcode::LoadBufferU32x2 ||
+				     op == ValueOpcode::LoadBufferU32x3 || op == ValueOpcode::LoadBufferU32x4);
 				const bool supported_indirect =
 				    (scalar_read && !memory.formatted && !memory.typed) ||
+				    vector_read ||
 				    (memory.kind == ResourceKind::Buffer && memory.SupportsIndirectBufferAccess(op));
 				if (!supported_indirect) {
 					Fail(flags.pc,
