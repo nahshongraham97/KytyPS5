@@ -144,7 +144,10 @@ NativeStorageBuffer(RenderContext& context, const PreparedBindings::BufferSource
 		     static_cast<unsigned long long>(size));
 	}
 	buffer_offset = static_cast<uint32_t>(adjustment);
-	const vk::DescriptorBufferInfo result {buffer->Handle(), aligned_offset, clamped_size + adjustment};
+	const auto descriptor_range =
+	    std::min<uint64_t>(Common::AlignUp(clamped_size + adjustment, sizeof(uint32_t)),
+	                       buffer->Size() - aligned_offset);
+	const vk::DescriptorBufferInfo result {buffer->Handle(), aligned_offset, descriptor_range};
 	if (resource.written) {
 		context.GetTextureCache().InvalidateMemoryFromGPU(address, size);
 	}

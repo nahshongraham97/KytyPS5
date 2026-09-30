@@ -151,9 +151,8 @@ MemoryResourceAccess PrepareMemoryResourceAccess(EmitterState& state, const IR::
 		case IR::ResourceKind::Buffer: {
 			access = PrepareStorageBufferResourceAccess(
 			    state, mem, state.storage_buffer_variable, TypeStorageBufferPointer(state));
-			access.index_offset = EmitBinaryU32(state, spv::OpShiftRightLogical, access.byte_offset,
-			                                    ConstantU32(state, 2u));
-			access.add_index_offset = true;
+			access.index_offset     = 0;
+			access.add_index_offset = false;
 			return access;
 		}
 		default: EXIT("unsupported memory resource kind: %u\n", static_cast<unsigned>(mem.kind));

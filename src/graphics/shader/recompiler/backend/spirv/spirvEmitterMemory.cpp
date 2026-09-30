@@ -87,11 +87,25 @@ uint32_t BufferByteAddress(ValueEmitContext& ctx, const IR::Inst& inst, const IR
 		index = Binary(state, spv::OpIAdd, TypeU32(state), index, BufferLane(state));
 	}
 	const bool swizzle = stride != 0u && (packed & (1u << 14u)) != 0u;
-	return CalculateBufferAddress(state, index, ctx.Arg(inst, 2), ctx.Arg(inst, 3), mem.offset,
-	                              ConstantU32(state, stride),
-	                              swizzle ? ConstantBool(state, true) : 0u,
-	                              ConstantU32(state, (packed >> 16u) & 3u))
-	    .byte;
+	auto byte_address =
+	    CalculateBufferAddress(state, index, ctx.Arg(inst, 2), ctx.Arg(inst, 3), mem.offset,
+	                           ConstantU32(state, stride), swizzle ? ConstantBool(state, true) : 0u,
+	                           ConstantU32(state, (packed >> 16u) & 3u))
+	        .byte;
+	const auto* descriptor =
+	    IR::FindBinding(state.program.bindings, IR::DescriptorBindingKind::Buffers);
+	if (descriptor != nullptr) {
+		const auto found =
+		    std::find(descriptor->resources.begin(), descriptor->resources.end(), mem.resource);
+		if (found != descriptor->resources.end()) {
+			const auto array_index = static_cast<uint32_t>(found - descriptor->resources.begin());
+			if (array_index < state.memory_byte_offsets.size()) {
+				byte_address = Binary(state, spv::OpIAdd, TypeU32(state), byte_address,
+				                      state.memory_byte_offsets[array_index]);
+			}
+		}
+	}
+	return byte_address;
 }
 
 uint32_t AddU64Low(EmitterState& state, uint32_t low, uint32_t high, uint32_t add_low,
@@ -307,15 +321,21 @@ PreparedMemoryElement PrepareMemoryElement(ValueEmitContext& ctx, const IR::Memo
 uint32_t LoadWordInBounds(ValueEmitContext& ctx, const MemoryResourceAccess& resource,
                           uint32_t index);
 
+uint32_t LoadWordOrUnaligned(ValueEmitContext& ctx, const MemoryResourceAccess& resource,
+                             uint32_t address, uint32_t index);
+
 uint32_t LoadSubwordInBounds(ValueEmitContext& ctx, const MemoryResourceAccess& resource,
                              uint32_t address, uint32_t index, uint32_t bits, bool sign_extend);
 
 uint32_t LoadWordPrepared(ValueEmitContext& ctx, const IR::Inst& inst, const IR::MemoryInfo& mem,
                           const MemoryResourceAccess& resource) {
-	const auto index = EmitMemoryElementIndex(ctx.state, resource, DwordIndex(ctx, inst, mem));
+	const auto address   = ByteAddress(ctx, inst, mem);
+	const auto raw_index = Binary(ctx.state, spv::OpShiftRightLogical, TypeU32(ctx.state), address,
+	                              ConstantU32(ctx.state, 2));
+	const auto index     = EmitMemoryElementIndex(ctx.state, resource, raw_index);
 	return EmitValueOrZeroIfCondition(
 	    ctx.state, EmitMemoryElementInBounds(ctx.state, resource, index),
-	    [&]() { return LoadWordInBounds(ctx, resource, index); });
+	    [&]() { return LoadWordOrUnaligned(ctx, resource, address, index); });
 }
 
 uint32_t LoadWord(ValueEmitContext& ctx, const IR::Inst& inst, IR::MemoryInfo mem) {
@@ -349,20 +369,79 @@ uint32_t LoadWordInBounds(ValueEmitContext& ctx, const MemoryResourceAccess& res
 
 uint32_t LoadSubwordInBounds(ValueEmitContext& ctx, const MemoryResourceAccess& resource,
                              uint32_t address, uint32_t index, uint32_t bits, bool sign_extend) {
-	const auto word = LoadWordInBounds(ctx, resource, index);
-	const auto byte  = Binary(ctx.state, spv::OpBitwiseAnd, TypeU32(ctx.state), address,
-	                          ConstantU32(ctx.state, 3));
-	const auto shift = Binary(ctx.state, spv::OpShiftLeftLogical, TypeU32(ctx.state), byte,
-	                          ConstantU32(ctx.state, 3));
-	const auto value =
-	    Binary(ctx.state, spv::OpBitwiseAnd, TypeU32(ctx.state),
-	           Binary(ctx.state, spv::OpShiftRightLogical, TypeU32(ctx.state), word, shift),
-	           ConstantU32(ctx.state, bits == 8u ? 0xffu : 0xffffu));
+	auto&      state = ctx.state;
+	const auto word  = LoadWordInBounds(ctx, resource, index);
+	const auto byte =
+	    Binary(state, spv::OpBitwiseAnd, TypeU32(state), address, ConstantU32(state, 3));
+	uint32_t value;
+	if (bits == 16u) {
+		const auto crosses =
+		    Binary(state, spv::OpIEqual, TypeBool(state), byte, ConstantU32(state, 3u));
+		value = EmitValueIfElseCondition(
+		    state, crosses, TypeU32(state),
+		    [&]() {
+			    const auto next_raw =
+			        Binary(state, spv::OpIAdd, TypeU32(state), index, ConstantU32(state, 1u));
+			    const auto next_index = EmitMemoryElementIndex(state, resource, next_raw);
+			    const auto next_word  = EmitValueOrZeroIfCondition(
+			        state, EmitMemoryElementInBounds(state, resource, next_index),
+			        [&]() { return LoadWordInBounds(ctx, resource, next_index); });
+			    const auto low_byte = Binary(state, spv::OpShiftRightLogical, TypeU32(state), word,
+			                                 ConstantU32(state, 24u));
+			    const auto high_byte =
+			        Binary(state, spv::OpShiftLeftLogical, TypeU32(state),
+			               Binary(state, spv::OpBitwiseAnd, TypeU32(state), next_word,
+			                      ConstantU32(state, 0xffu)),
+			               ConstantU32(state, 8u));
+			    return Binary(state, spv::OpBitwiseOr, TypeU32(state), low_byte, high_byte);
+		    },
+		    [&]() {
+			    const auto shift =
+			        Binary(state, spv::OpShiftLeftLogical, TypeU32(state), byte, ConstantU32(state, 3));
+			    return Binary(state, spv::OpBitwiseAnd, TypeU32(state),
+			                  Binary(state, spv::OpShiftRightLogical, TypeU32(state), word, shift),
+			                  ConstantU32(state, 0xffffu));
+		    });
+	} else {
+		const auto shift =
+		    Binary(state, spv::OpShiftLeftLogical, TypeU32(state), byte, ConstantU32(state, 3));
+		value = Binary(state, spv::OpBitwiseAnd, TypeU32(state),
+		               Binary(state, spv::OpShiftRightLogical, TypeU32(state), word, shift),
+		               ConstantU32(state, 0xffu));
+	}
 	if (!sign_extend) return value;
-	const auto left = Binary(ctx.state, spv::OpShiftLeftLogical, TypeU32(ctx.state), value,
-	                         ConstantU32(ctx.state, 32u - bits));
-	return Binary(ctx.state, spv::OpShiftRightArithmetic, TypeU32(ctx.state), left,
-	              ConstantU32(ctx.state, 32u - bits));
+	const auto left = Binary(state, spv::OpShiftLeftLogical, TypeU32(state), value,
+	                         ConstantU32(state, 32u - bits));
+	return Binary(state, spv::OpShiftRightArithmetic, TypeU32(state), left,
+	              ConstantU32(state, 32u - bits));
+}
+
+uint32_t LoadWordOrUnaligned(ValueEmitContext& ctx, const MemoryResourceAccess& resource,
+                             uint32_t address, uint32_t index) {
+	auto&      state = ctx.state;
+	const auto rem   = Binary(state, spv::OpBitwiseAnd, TypeU32(state), address, ConstantU32(state, 3u));
+	const auto is_unaligned =
+	    Binary(state, spv::OpINotEqual, TypeBool(state), rem, ConstantU32(state, 0u));
+	return EmitValueIfElseCondition(
+	    state, is_unaligned, TypeU32(state),
+	    [&]() {
+		    const auto w0       = LoadWordInBounds(ctx, resource, index);
+		    const auto next_raw = Binary(state, spv::OpIAdd, TypeU32(state), index, ConstantU32(state, 1u));
+		    const auto next_index = EmitMemoryElementIndex(state, resource, next_raw);
+		    const auto w1         = EmitValueOrZeroIfCondition(
+		        state, EmitMemoryElementInBounds(state, resource, next_index),
+		        [&]() { return LoadWordInBounds(ctx, resource, next_index); });
+		    const auto shift =
+		        Binary(state, spv::OpShiftLeftLogical, TypeU32(state), rem, ConstantU32(state, 3u));
+		    const auto upper_shift =
+		        Binary(state, spv::OpShiftLeftLogical, TypeU32(state),
+		               Binary(state, spv::OpISub, TypeU32(state), ConstantU32(state, 4u), rem),
+		               ConstantU32(state, 3u));
+		    const auto part0 = Binary(state, spv::OpShiftRightLogical, TypeU32(state), w0, shift);
+		    const auto part1 = Binary(state, spv::OpShiftLeftLogical, TypeU32(state), w1, upper_shift);
+		    return Binary(state, spv::OpBitwiseOr, TypeU32(state), part0, part1);
+	    },
+	    [&]() { return LoadWordInBounds(ctx, resource, index); });
 }
 
 uint32_t LoadSubword(ValueEmitContext& ctx, const IR::Inst& inst, IR::MemoryInfo mem, uint32_t bits,
@@ -483,29 +562,83 @@ uint32_t FormattedLoad(ValueEmitContext& ctx, const IR::Inst& inst, const IR::Me
 void StoreSubwordInBounds(ValueEmitContext& ctx, const IR::MemoryInfo& mem,
                           const MemoryResourceAccess& resource, uint32_t address, uint32_t index,
                           uint32_t bits, uint32_t data) {
-	const auto pointer = EmitMemoryElementPointer(ctx.state, resource, index);
-	const auto shift   = Binary(ctx.state, spv::OpShiftLeftLogical, TypeU32(ctx.state),
-	                            Binary(ctx.state, spv::OpBitwiseAnd, TypeU32(ctx.state), address,
-	                                   ConstantU32(ctx.state, 3)),
-	                            ConstantU32(ctx.state, 3));
-	const auto mask    = Binary(ctx.state, spv::OpShiftLeftLogical, TypeU32(ctx.state),
-	                            ConstantU32(ctx.state, bits == 8u ? 0xffu : 0xffffu), shift);
-	const auto value   = Binary(ctx.state, spv::OpShiftLeftLogical, TypeU32(ctx.state),
-	                            Binary(ctx.state, spv::OpBitwiseAnd, TypeU32(ctx.state), data,
-	                                   ConstantU32(ctx.state, bits == 8u ? 0xffu : 0xffffu)),
+	auto&      state = ctx.state;
+	const auto byte =
+	    Binary(state, spv::OpBitwiseAnd, TypeU32(state), address, ConstantU32(state, 3));
+	if (bits == 16u) {
+		const auto crosses =
+		    Binary(state, spv::OpIEqual, TypeBool(state), byte, ConstantU32(state, 3u));
+		EmitIfElseCondition(
+		    state, crosses,
+		    [&]() {
+			    const auto data_byte0 =
+			        Binary(state, spv::OpBitwiseAnd, TypeU32(state), data, ConstantU32(state, 0xffu));
+			    StoreSubwordInBounds(ctx, mem, resource, address, index, 8u, data_byte0);
+			    const auto next_addr =
+			        Binary(state, spv::OpIAdd, TypeU32(state), address, ConstantU32(state, 1u));
+			    const auto next_raw =
+			        Binary(state, spv::OpShiftRightLogical, TypeU32(state), next_addr,
+			               ConstantU32(state, 2u));
+			    const auto next_index = EmitMemoryElementIndex(state, resource, next_raw);
+			    EmitIfCondition(
+			        state, EmitMemoryElementInBounds(state, resource, next_index), [&]() {
+				        const auto data_byte1 =
+				            Binary(state, spv::OpBitwiseAnd, TypeU32(state),
+				                   Binary(state, spv::OpShiftRightLogical, TypeU32(state), data,
+				                          ConstantU32(state, 8u)),
+				                   ConstantU32(state, 0xffu));
+				        StoreSubwordInBounds(ctx, mem, resource, next_addr, next_index, 8u,
+				                             data_byte1);
+			        });
+		    },
+		    [&]() {
+			    const auto pointer = EmitMemoryElementPointer(state, resource, index);
+			    const auto shift =
+			        Binary(state, spv::OpShiftLeftLogical, TypeU32(state), byte, ConstantU32(state, 3));
+			    const auto mask = Binary(state, spv::OpShiftLeftLogical, TypeU32(state),
+			                             ConstantU32(state, 0xffffu), shift);
+			    const auto value =
+			        Binary(state, spv::OpShiftLeftLogical, TypeU32(state),
+			               Binary(state, spv::OpBitwiseAnd, TypeU32(state), data,
+			                      ConstantU32(state, 0xffffu)),
+			               shift);
+			    const auto merge = [&](uint32_t old) {
+				    return Binary(state, spv::OpBitwiseOr, TypeU32(state),
+				                  Binary(state, spv::OpBitwiseAnd, TypeU32(state), old,
+				                         Unary(state, spv::OpNot, TypeU32(state), mask)),
+				                  value);
+			    };
+			    if (mem.kind == IR::ResourceKind::Scratch) {
+				    const auto old = state.builder.AllocateId();
+				    state.builder.AddFunction(spv::OpLoad, TypeU32(state), old, pointer);
+				    state.builder.AddFunction(spv::OpStore, pointer, merge(old));
+			    } else {
+				    AtomicUpdate(state, pointer, mem.kind, merge);
+			    }
+		    });
+		return;
+	}
+	const auto pointer = EmitMemoryElementPointer(state, resource, index);
+	const auto shift   = Binary(state, spv::OpShiftLeftLogical, TypeU32(state), byte,
+	                            ConstantU32(state, 3));
+	const auto mask    = Binary(state, spv::OpShiftLeftLogical, TypeU32(state),
+	                            ConstantU32(state, 0xffu), shift);
+	const auto value   = Binary(state, spv::OpShiftLeftLogical, TypeU32(state),
+	                            Binary(state, spv::OpBitwiseAnd, TypeU32(state), data,
+	                                   ConstantU32(state, 0xffu)),
 	                            shift);
 	const auto merge   = [&](uint32_t old) {
-		return Binary(ctx.state, spv::OpBitwiseOr, TypeU32(ctx.state),
-		              Binary(ctx.state, spv::OpBitwiseAnd, TypeU32(ctx.state), old,
-		                     Unary(ctx.state, spv::OpNot, TypeU32(ctx.state), mask)),
+		return Binary(state, spv::OpBitwiseOr, TypeU32(state),
+		              Binary(state, spv::OpBitwiseAnd, TypeU32(state), old,
+		                     Unary(state, spv::OpNot, TypeU32(state), mask)),
 		              value);
 	};
 	if (mem.kind == IR::ResourceKind::Scratch) {
-		const auto old = ctx.state.builder.AllocateId();
-		ctx.state.builder.AddFunction(spv::OpLoad, TypeU32(ctx.state), old, pointer);
-		ctx.state.builder.AddFunction(spv::OpStore, pointer, merge(old));
+		const auto old = state.builder.AllocateId();
+		state.builder.AddFunction(spv::OpLoad, TypeU32(state), old, pointer);
+		state.builder.AddFunction(spv::OpStore, pointer, merge(old));
 	} else {
-		AtomicUpdate(ctx.state, pointer, mem.kind, merge);
+		AtomicUpdate(state, pointer, mem.kind, merge);
 	}
 }
 
@@ -535,11 +668,71 @@ void StoreWordInBounds(ValueEmitContext& ctx, const MemoryResourceAccess& resour
 	                              resource.memory_access);
 }
 
+void StoreWordOrUnaligned(ValueEmitContext& ctx, const IR::MemoryInfo& mem,
+                          const MemoryResourceAccess& resource, uint32_t address, uint32_t index,
+                          uint32_t data) {
+	auto&      state = ctx.state;
+	const auto rem   = Binary(state, spv::OpBitwiseAnd, TypeU32(state), address, ConstantU32(state, 3u));
+	const auto is_unaligned =
+	    Binary(state, spv::OpINotEqual, TypeBool(state), rem, ConstantU32(state, 0u));
+	EmitIfElseCondition(
+	    state, is_unaligned,
+	    [&]() {
+		    const auto is_rem_2 =
+		        Binary(state, spv::OpIEqual, TypeBool(state), rem, ConstantU32(state, 2u));
+		    EmitIfElseCondition(
+		        state, is_rem_2,
+		        [&]() {
+			        const auto data_0 = Binary(state, spv::OpBitwiseAnd, TypeU32(state), data,
+			                                   ConstantU32(state, 0xffffu));
+			        StoreSubwordInBounds(ctx, mem, resource, address, index, 16u, data_0);
+			        const auto address_1 =
+			            Binary(state, spv::OpIAdd, TypeU32(state), address, ConstantU32(state, 2u));
+			        const auto raw_index_1 = Binary(state, spv::OpShiftRightLogical, TypeU32(state),
+			                                        address_1, ConstantU32(state, 2u));
+			        const auto index_1     = EmitMemoryElementIndex(state, resource, raw_index_1);
+			        EmitIfCondition(
+			            state, EmitMemoryElementInBounds(state, resource, index_1), [&]() {
+				            const auto data_1 = Binary(state, spv::OpShiftRightLogical,
+				                                       TypeU32(state), data, ConstantU32(state, 16u));
+				            StoreSubwordInBounds(ctx, mem, resource, address_1, index_1, 16u,
+				                                 data_1);
+			            });
+		        },
+		        [&]() {
+			        for (uint32_t i = 0; i < 4; i++) {
+				        const auto addr_i = i == 0u
+				                                ? address
+				                                : Binary(state, spv::OpIAdd, TypeU32(state), address,
+				                                         ConstantU32(state, i));
+				        const auto raw_idx_i = Binary(state, spv::OpShiftRightLogical, TypeU32(state),
+				                                      addr_i, ConstantU32(state, 2u));
+				        const auto idx_i     = EmitMemoryElementIndex(state, resource, raw_idx_i);
+				        EmitIfCondition(
+				            state, EmitMemoryElementInBounds(state, resource, idx_i), [&]() {
+					            const auto shift_i = ConstantU32(state, i * 8u);
+					            const auto data_i  = Binary(
+					                state, spv::OpBitwiseAnd, TypeU32(state),
+					                Binary(state, spv::OpShiftRightLogical, TypeU32(state), data,
+					                       shift_i),
+					                ConstantU32(state, 0xffu));
+					            StoreSubwordInBounds(ctx, mem, resource, addr_i, idx_i, 8u,
+					                                 data_i);
+				            });
+			        }
+		        });
+	    },
+	    [&]() { StoreWordInBounds(ctx, resource, index, data); });
+}
+
 void StoreWordPrepared(ValueEmitContext& ctx, const IR::Inst& inst, const IR::MemoryInfo& mem,
                        const MemoryResourceAccess& resource, uint32_t data) {
-	const auto index = EmitMemoryElementIndex(ctx.state, resource, DwordIndex(ctx, inst, mem));
+	const auto address   = ByteAddress(ctx, inst, mem);
+	const auto raw_index = Binary(ctx.state, spv::OpShiftRightLogical, TypeU32(ctx.state), address,
+	                              ConstantU32(ctx.state, 2));
+	const auto index     = EmitMemoryElementIndex(ctx.state, resource, raw_index);
 	EmitIfCondition(ctx.state, EmitMemoryElementInBounds(ctx.state, resource, index), [&]() {
-		StoreWordInBounds(ctx, resource, index, data);
+		StoreWordOrUnaligned(ctx, mem, resource, address, index, data);
 	});
 }
 
@@ -708,7 +901,8 @@ uint32_t LoadFormattedInBounds(ValueEmitContext& ctx, const IR::MemoryInfo& mem,
 	return LoadFormattedComponent(
 	    ctx, mem, plan.info, output_component,
 	    [&](uint32_t component) {
-		    return LoadWordInBounds(ctx, plan.resource, plan.indices[component]);
+		    return LoadWordOrUnaligned(ctx, plan.resource, plan.addresses[component],
+		                               plan.indices[component]);
 	    },
 	    [&](uint32_t component, uint32_t bits, bool sign_extend) {
 		    return LoadSubwordInBounds(ctx, plan.resource, plan.addresses[component],
@@ -791,10 +985,12 @@ void StoreFormattedPrepared(ValueEmitContext& ctx, const IR::Inst& inst,
 				StoreSubwordInBounds(ctx, mem, resource, plan.addresses[component],
 				                     plan.indices[component], bits, value);
 			} else {
-				StoreWordInBounds(ctx, resource, plan.indices[component], value);
+				StoreWordOrUnaligned(ctx, mem, resource, plan.addresses[component],
+				                     plan.indices[component], value);
 			}
 		}
-		if (info.packed_bitfield) StoreWordInBounds(ctx, resource, plan.indices[0], packed);
+		if (info.packed_bitfield)
+			StoreWordOrUnaligned(ctx, mem, resource, plan.addresses[0], plan.indices[0], packed);
 	});
 }
 
@@ -1237,8 +1433,7 @@ uint32_t EmitBufferAtomic64(ValueEmitContext& ctx, const IR::Inst& inst) {
 	    state, ctx.Arg(inst, inst.NumArgs() - 1), TypeU64(state), ConstantU64(state, 0), [&]() {
 		    const auto resource = PrepareStorageBufferResourceAccess(
 		        state, mem, state.storage_buffer_u64_variable, TypeStorageBufferU64Pointer(state));
-		    const auto byte_address = Binary(state, spv::OpIAdd, TypeU32(state),
-		                                     ByteAddress(ctx, inst, mem), resource.byte_offset);
+		    const auto byte_address = ByteAddress(ctx, inst, mem);
 		    const auto index = Binary(state, spv::OpShiftRightLogical, TypeU32(state), byte_address,
 		                              ConstantU32(state, 3u));
 		    return EmitValueOrDefaultIfCondition(
@@ -1413,19 +1608,19 @@ uint32_t EmitReadConst(ValueEmitContext& ctx, const IR::Inst& inst) {
 void EmitReadConstBuffer(ValueEmitContext& ctx, const IR::Inst& inst) {
 	auto mem = ctx.Memory(inst);
 	if (mem.planning_only) return;
-	auto& state        = ctx.state;
-	mem.kind           = IR::ResourceKind::ScalarBuffer;
-	auto index = Binary(state, spv::OpShiftRightLogical, TypeU32(state), ctx.Arg(inst, 1),
-	                    ConstantU32(state, 2));
-	if (mem.offset >= 4u) {
-		index = Binary(state, spv::OpIAdd, TypeU32(state), index, ConstantU32(state, mem.offset >> 2u));
+	auto& state = ctx.state;
+	mem.kind    = IR::ResourceKind::ScalarBuffer;
+	const auto access = PrepareMemoryResourceAccess(state, mem);
+	auto address = ctx.Arg(inst, 1);
+	if (mem.offset != 0u) {
+		address = Binary(state, spv::OpIAdd, TypeU32(state), address, ConstantU32(state, mem.offset));
 	}
-	const auto access    = PrepareMemoryResourceAccess(state, mem);
-	const auto element   = EmitMemoryElementIndex(state, access, index);
+	address = Binary(state, spv::OpIAdd, TypeU32(state), address, access.byte_offset);
+	const auto element =
+	    Binary(state, spv::OpShiftRightLogical, TypeU32(state), address, ConstantU32(state, 2));
 	const auto condition = EmitMemoryElementInBounds(state, access, element);
 	ctx.Define(inst, EmitValueOrZeroIfCondition(state, condition, [&]() {
-		           return EmitNative<spv::OpLoad, IR::Type::U32>(
-		               state, EmitMemoryElementPointer(state, access, element));
+		           return LoadWordOrUnaligned(ctx, access, address, element);
 	           }));
 }
 
