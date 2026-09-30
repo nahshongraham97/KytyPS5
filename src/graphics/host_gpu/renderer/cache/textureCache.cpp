@@ -1877,9 +1877,17 @@ bool TextureCache::DownloadImageMemory(ImageId id) {
 		std::tie(mapped, offset) =
 		    ring.Map(range.size, std::max<uint64_t>(image.info.bytes_per_block, 4));
 		if (mapped == nullptr) {
-			EXIT("TextureCache: failed to map reusable download buffer\n");
+			dedicated = std::make_shared<Buffer>(m_graphics, m_scheduler, MemoryUsage::Download, 0,
+			                                     AllFlags, range.size);
+			download  = dedicated.get();
+			mapped    = dedicated->Mapped().data();
+			offset    = 0;
+			if (mapped == nullptr) {
+				return false;
+			}
+		} else {
+			ring.Commit();
 		}
-		ring.Commit();
 	}
 	if (!LibKernel::Memory::TryReadBacking(range.address, mapped, range.size)) {
 		return false;
